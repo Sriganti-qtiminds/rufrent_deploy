@@ -9,6 +9,8 @@ import RRPackagesSection from "./PackageSectionView";
 import TestimonialsSection from "./TestimonialsView";
 import FooterSection from "./InitialFooterView";
 
+import CommunityCarousel from "./CommunityCarousel";
+
 const InitialLandingPage = () => {
   return (
     <>
@@ -19,6 +21,7 @@ const InitialLandingPage = () => {
       {/* <!-- About Us Section --> */}
       <AboutSection />
       {/* <RRPackagesSection /> */}
+      <CommunityCarousel />
       {/* <!-- Why Choose Us Section --> */}
       <WcuSection />
 

@@ -27,7 +27,7 @@ const SearchableDropdown = ({ label, value, onChange, options }) => {
   }, [isOpen]);
 
   // Get selected option or use label
-  const selectedOption = options.find((option) => option.id === value);
+  const selectedOption = options.find((option) => option.name === value);
   const displayText = selectedOption ? selectedOption.name : label;
 
   // Filter options based on search term, removing spaces
@@ -98,9 +98,9 @@ const SearchableDropdown = ({ label, value, onChange, options }) => {
             filteredOptions.map((option) => (
               <li
                 key={option.id}
-                onClick={() => handleOptionClick(option.id)}
+                onClick={() => handleOptionClick(option.name)}
                 className={`px-2 py-1 text-xs text-[#001433] hover:bg-gray-100 cursor-pointer ${
-                  option.id === value ? "bg-gray-200" : ""
+                  option.name === value ? "bg-gray-200" : ""
                 }`}
               >
                 {option.name}

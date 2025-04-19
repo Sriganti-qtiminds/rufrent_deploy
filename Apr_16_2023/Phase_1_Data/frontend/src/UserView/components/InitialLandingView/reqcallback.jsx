@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import tailwindStyles from "../../../utils/tailwindStyles"; 
+import { motion } from "framer-motion";
 
 const apiUrl = `${import.meta.env.VITE_API_URL}`;
 
@@ -19,6 +20,7 @@ const CompactCallbackForm = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [userTypes, setUserTypes] = useState([]);
   const [loadingUserTypes, setLoadingUserTypes] = useState(false);
+  const [error, setError] = useState(null);
   const dropdownRef = useRef(null);
 
   // Fetch countries data and user types

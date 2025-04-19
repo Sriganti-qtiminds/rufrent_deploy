@@ -154,6 +154,10 @@ router.put("/updateRMTask", (req, res) =>
   updateTaskController.updateRMTask(req, res)
 );
 
+router.get("/getCommunityImg", (req, res) =>
+  propertyController.getAllCommunityImg(req, res)
+);
+
 // user Routes
 router.post("/AddProperty", upload.array("images", 10), (req, res) =>
   propertyController.createProperty(req, res)

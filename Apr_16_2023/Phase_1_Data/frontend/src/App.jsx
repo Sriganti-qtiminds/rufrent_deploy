@@ -79,7 +79,7 @@ const App = () => {
         {/* User Routes */}
         {/* <Route element={<ProtectedRoute roles={["user"]} />}> */}
 
-        <Route path="/user" element={<UserLayout />}>
+        <Route path="/property/rent" element={<UserLayout />}>
           <Route index element={<UserLandingView />} />
           <Route path="mylistings" element={<MyListingsView />} />
           <Route path="postProperties" element={<PostPropertiesView />} />

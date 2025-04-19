@@ -1,16 +1,14 @@
 
-
+// export default UserLandingView;
 
 import React, { useEffect, useState, useRef, useCallback } from "react";
-import { useLocation } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import apiStatusConstants from "../../../utils/apiStatusConstants";
 import useListingStore from "../../../store/listingsStore";
-import useFilterStore from "../../../store/filterStore";
 import Cookies from "js-cookie";
 
 const jwtSecretKey = `${import.meta.env.VITE_JWT_SECRET_KEY}`;
 
-import Navbar from "../../../components/CommonViews/Navbar";
 import FilterSection from "./FilterView";
 import SuccessView from "./SuccessView";
 import PropertyListingCardSkeletonLoader from "../../../components/CommonViews/PropertyCardSkelton";
@@ -18,7 +16,7 @@ import FailureView from "../../../components/CommonViews/FailureView";
 
 const InfiniteScrollLoader = ({ isVisible }) => (
   <div
-    className={`flex justify-center items-center py-4  transition-opacity duration-500 ${
+    className={`flex justify-center items-center py-4 transition-opacity duration-500 ${
       isVisible ? "opacity-100" : "opacity-0"
     }`}
   >
@@ -35,18 +33,32 @@ const UserLandingView = () => {
     setCurrentPage,
   } = useListingStore();
 
-  const { filterData } = useFilterStore();
-  const location = useLocation();
-  const activePath = location.pathname;
+  const [searchParams, setSearchParams] = useSearchParams();
+
   const jwtToken = Cookies.get(jwtSecretKey);
 
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const observerRef = useRef(null);
   const lastListingRef = useRef(null);
 
+  // Extract filters from query params
+  const getFilterDataFromParams = () => {
+    return {
+      city: searchParams.get("city") || "",
+      builders: searchParams.get("builders") || "",
+      community: searchParams.get("community") || "",
+      hometype: searchParams.get("hometype")?.split(",") || [],
+      propertydescription:
+        searchParams.get("propertydescription")?.split(",") || [],
+      availability: searchParams.get("availability")?.split(",") || [],
+      tenanttype: searchParams.get("tenanttype")?.split(",") || [],
+    };
+  };
+
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
+        const filterData = getFilterDataFromParams();
         await fetchListings(filterData, 1, 15);
         if (jwtToken === undefined) {
           localStorage.clear();
@@ -56,7 +68,7 @@ const UserLandingView = () => {
       }
     };
     fetchInitialData();
-  }, [fetchListings, filterData]);
+  }, [fetchListings, searchParams]);
 
   const handleObserver = useCallback(
     (entries) => {
@@ -70,8 +82,9 @@ const UserLandingView = () => {
         setIsLoadingMore(true);
         setTimeout(() => {
           setCurrentPage(currentPage + 1);
+          const filterData = getFilterDataFromParams();
           fetchListings(filterData, currentPage + 1, 15);
-        }, 500); // Smooth loading delay
+        }, 500);
       }
     },
     [
@@ -80,15 +93,14 @@ const UserLandingView = () => {
       pagination.totalPages,
       isLoadingMore,
       fetchListings,
-      filterData,
     ]
   );
 
   useEffect(() => {
     const observer = new IntersectionObserver(handleObserver, {
       root: null,
-      rootMargin: "100px", // Trigger slightly earlier for smooth loading
-      threshold: 0.2, // Load when 20% of the last listing is visible
+      rootMargin: "100px",
+      threshold: 0.2,
     });
 
     if (lastListingRef.current) {
@@ -105,9 +117,13 @@ const UserLandingView = () => {
 
   useEffect(() => {
     if (apiResponse.status === apiStatusConstants.success && isLoadingMore) {
-      setTimeout(() => setIsLoadingMore(false), 400); // Smoothly hide loader
+      setTimeout(() => setIsLoadingMore(false), 400);
     }
   }, [apiResponse.status, isLoadingMore]);
+
+  const handleFilterChange = (filters) => {
+    fetchListings(filters, 1, 15);
+  };
 
   const renderListings = () => {
     if (apiResponse.status === apiStatusConstants.initial) {
@@ -162,24 +178,22 @@ const UserLandingView = () => {
 
   return (
     <div className="flex flex-col bg-gray-200 items-center">
-      {activePath === "/user-landing" && <Navbar />}
       <div className="w-full md:p-5">
         <div style={{ height: maxHeight }} className="grid md:grid-cols-10">
           <div className="hidden 2xl:block 2xl:col-span-1"></div>
           <div
             style={{ maxHeight: maxHeight }}
-            className="md:col-span-3 2xl:col-span-2 rounded-sm md:shadow-md"
+            className="md:col-span-4 lg:col-span-3 2xl:col-span-2 rounded-sm md:shadow-md"
           >
             <FilterSection
-              currentPageChange={() => {
-                setCurrentPage(1);
-                fetchListings(filterData, 1, 15);
-              }}
+              setSearchParams={setSearchParams}
+              currentPageChange={handleFilterChange} // Pass the callback
+              searchParams={searchParams}
             />
           </div>
           <div
             style={{ maxHeight: maxHeight }}
-            className="md:col-span-7 2xl:col-span-6 rounded-l p-3 md:p-0 md:px-5 overflow-y-auto scroll-smooth [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:white [&::-webkit-scrollbar-thumb]:bg-blue-300"
+            className="md:col-span-6 lg:col-span-7 2xl:col-span-6 rounded-l p-3 md:p-0 md:px-5 overflow-y-auto scroll-smooth [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:white [&::-webkit-scrollbar-thumb]:bg-blue-300"
           >
             {renderListings()}
           </div>

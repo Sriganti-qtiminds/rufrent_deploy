@@ -1,71 +1,92 @@
 
-// -----------------------------------
+// export default FilterSection;
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect } from "react";
 import { FaFilter } from "react-icons/fa6";
+import { Check } from "lucide-react";
+
 import tailwindStyles from "../../../utils/tailwindStyles";
 import useFilterStore from "../../../store/filterStore";
-import useListingStore from "../../../store/listingsStore";
-import SearchableDropdown from "../PostPropertyView/SearchDropdownView";
-import BrokerageView from "../InitialLandingView/BrokerageView";
-import ComplimentaryModel from "../FavoritesView/Complimentary";
+import SearchableDropdown from "./SearchableDropdown";
 
-const FilterSection = () => {
+const FilterSection = ({
+  currentPageChange,
+  setSearchParams,
+  searchParams,
+}) => {
   const [isShow, setIsShow] = useState(false);
-
-  // Get states and actions from both stores
   const {
     dropdownData,
-    setFilterData,
     fetchFilters,
     fetchBuildersList,
     fetchCommunitiesList,
-    filterData,
     setDropdownData,
   } = useFilterStore();
 
-  const { fetchListings, setCurrentPage, clearListings } = useListingStore();
+  const [filters, setFilters] = useState(() => ({
+    city: searchParams.get("city") || "",
+    builders: searchParams.get("builders") || "",
+    community: searchParams.get("community") || "",
+    hometype: searchParams.get("hometype")?.split(",").filter(Boolean) || [],
+    propertydescription:
+      searchParams.get("propertydescription")?.split(",").filter(Boolean) || [],
+    availability:
+      searchParams.get("availability")?.split(",").filter(Boolean) || [],
+    tenanttype:
+      searchParams.get("tenanttype")?.split(",").filter(Boolean) || [],
+  }));
 
-  // Initialize local filters state from filterStore
-  const [filters, setFilters] = useState(filterData);
-
-  // Fetch initial filter data
   useEffect(() => {
-    const initializeData = async () => {
-      await fetchFilters();
-    };
-    initializeData();
+    fetchFilters();
   }, [fetchFilters]);
 
-  // Fetch builders when city changes
   useEffect(() => {
-    if (filters.city) {
-      fetchBuildersList(filters.city);
-    }
-  }, [filters.city, fetchBuildersList]);
+    if (filters.city) fetchBuildersList(filters.city);
+    else setDropdownData({ builderList: [], communityList: [] });
+  }, [filters.city, fetchBuildersList, setDropdownData]);
 
-  // Fetch communities when builder changes
   useEffect(() => {
-    if (filters.builders) {
-      fetchCommunitiesList(filters.builders);
-    }
-  }, [filters.builders, fetchCommunitiesList]);
+    if (filters.builders) fetchCommunitiesList(filters.builders);
+    else setDropdownData({ communityList: [] });
+  }, [filters.builders, fetchCommunitiesList, setDropdownData]);
 
-  const handleApplyFilters = async (e) => {
-    e.preventDefault();
-    try {
-      // Clear existing listings and reset page before applying new filters
-      clearListings();
-      setCurrentPage(1);
-      await fetchListings(filters, 1, 15);
-      await setFilterData(filters);
-      setIsShow(false);
-    } catch (error) {
-      console.error("Error applying filters:", error);
-    }
+  const handleChange = (e) => {
+    const { name, value, type, checked } = e.target;
+    setFilters((prev) => {
+      if (type === "checkbox") {
+        const currentValues = Array.isArray(prev[name]) ? prev[name] : [];
+        return {
+          ...prev,
+          [name]: checked
+            ? [...currentValues, value]
+            : currentValues.filter((item) => item !== value),
+        };
+      }
+      return {
+        ...prev,
+        [name]: value,
+        ...(name === "city" && { builders: "", community: "" }),
+        ...(name === "builders" && { community: "" }),
+      };
+    });
   };
 
-  const handleClearFilters = useCallback(async () => {
+  const handleApplyFilters = (e) => {
+    e.preventDefault();
+    const params = new URLSearchParams();
+    Object.entries(filters).forEach(([key, value]) => {
+      if (Array.isArray(value) && value.length) {
+        params.set(key, value.join(","));
+      } else if (value && !Array.isArray(value)) {
+        params.set(key, value);
+      }
+    });
+    setSearchParams(params);
+    currentPageChange(filters);
+    setIsShow(false);
+  };
+
+  const handleClearFilters = () => {
     const emptyFilters = {
       city: "",
       builders: "",
@@ -75,227 +96,152 @@ const FilterSection = () => {
       availability: [],
       tenanttype: [],
     };
-    const emptyDropdownData = {
-      builderList: [],
-      communityList: [],
-    };
-
-    try {
-      // Clear listings and reset everything
-      clearListings();
-      setCurrentPage(1);
-      await fetchListings(emptyFilters, 1, 15);
-      setFilters(emptyFilters);
-      await setFilterData(emptyFilters);
-      await setDropdownData(emptyDropdownData);
-      setIsShow(false);
-    } catch (error) {
-      console.error("Error clearing filters:", error);
-    }
-  }, [
-    setFilterData,
-    fetchListings,
-    clearListings,
-    setCurrentPage,
-    setDropdownData,
-  ]);
-
-  const handleChange = (e) => {
-    const { name, value, type, checked } = e.target;
-
-    if (type === "checkbox") {
-      setFilters((prev) => {
-        const currentValues = prev[name] || [];
-        if (checked) {
-          return {
-            ...prev,
-            [name]: [...currentValues, value],
-          };
-        } else {
-          return {
-            ...prev,
-            [name]: currentValues.filter((item) => item !== value),
-          };
-        }
-      });
-    } else {
-      setFilters((prev) => ({
-        ...prev,
-        [name]: value,
-        ...(name === "city" ? { builders: "", community: "" } : {}),
-        ...(name === "builders" ? { community: "" } : {}),
-      }));
-      if (name === "city") {
-        setDropdownData({
-          builderList: [],
-          communityList: [],
-        });
-      } else if (name === "builders") {
-        setDropdownData({
-          communityList: [],
-        });
-      }
-    }
+    setFilters(emptyFilters);
+    setDropdownData({ builderList: [], communityList: [] });
+    setSearchParams(new URLSearchParams());
+    currentPageChange(emptyFilters);
+    setIsShow(false);
   };
 
-  const renderDropdown = (name, options, label) => {
-    return (
-      <div>
-        <p className={`${tailwindStyles.paragraph_b} mb-1`}>{label}</p>
-        <SearchableDropdown
-          name={name}
-          options={options}
-          value={filters[name]}
-          onChange={handleChange}
-          placeholder={`Select ${label}`}
-          displayKey="name"
-          valueKey="id"
-        />
+  // Reusable dropdown renderer
+  const renderDropdown = (name, options, label) => (
+    <div className={`${label == "Community" && "col-span-2"}`}>
+      <p className={`${tailwindStyles.paragraph_b} mb-1`}>{label}</p>
+      <SearchableDropdown
+        name={name}
+        options={options}
+        value={filters[name]}
+        onChange={handleChange}
+        placeholder={`Select ${label}`}
+        displayKey="name"
+        valueKey="name"
+      />
+    </div>
+  );
+
+  
+
+  const renderCheckboxGroup = (
+    name,
+    options,
+    label,
+    gridCols = "grid-cols-3"
+  ) => (
+    <div className="flex flex-col">
+      <p className={`${tailwindStyles.paragraph_b} text-start pb-2`}>{label}</p>
+      <div className={`grid ${gridCols} gap-2`}>
+        {options.map((item) => {
+          const isSelected = filters[name].includes(String(item.name));
+          return (
+            <label
+              key={item.id}
+              className={`
+                flex items-center justify-between 
+                px-2 py-1 rounded-full 
+                border transition-all duration-200
+                cursor-pointer
+                ${
+                  isSelected
+                    ? "bg-blue-500 text-white border-blue-500"
+                    : "bg-white text-gray-700 border-gray-300 hover:bg-gray-50"
+                }
+              `}
+            >
+              <span className="text-[10px] lg:text-xs 2xl:text-md">
+                {item.name}
+              </span>
+              <input
+                type="checkbox"
+                name={name}
+                value={item.name}
+                checked={isSelected}
+                onChange={handleChange}
+                className="hidden" // Hide the actual checkbox
+              />
+              <span
+                className={`
+                  w-3 h-3 rounded-full 
+                  flex items-center justify-center 
+                  transition-colors duration-200
+                  ${
+                    isSelected
+                      ? "bg-white text-blue-500"
+                      : "bg-gray-200 text-gray-400"
+                  }
+                `}
+              >
+                {isSelected && <Check className="w-2 h-2 font-bold" />}
+              </span>
+            </label>
+          );
+        })}
       </div>
-    );
-  };
+    </div>
+  );
 
   const renderFilterForm = () => (
     <form
+      onSubmit={handleApplyFilters}
       className="space-y-2 overflow-y-auto h-full scroll-smooth [&::-webkit-scrollbar]:w-[3px] [&::-webkit-scrollbar-track]:bg-white [&::-webkit-scrollbar-thumb]:bg-gray-300"
       style={{ maxHeight: "calc(100% - 50px)" }}
     >
-      {renderDropdown("city", dropdownData.cityList, "City")}
-      {renderDropdown("builders", dropdownData.builderList, "Builder")}
-      {renderDropdown("community", dropdownData.communityList, "Community")}
-
-      <div className="flex flex-col">
-        <p className={`${tailwindStyles.paragraph_b} text-start pb-1`}>
-          House Type
-        </p>
-        <div className="grid grid-cols-3">
-          {dropdownData.bedroomTypes.map((type) => (
-            <label
-              key={type.id}
-              className={`${tailwindStyles.paragraph} flex items-center space-x-2 pr-2`}
-            >
-              <input
-                type="checkbox"
-                name="hometype"
-                value={type.id}
-                checked={
-                  filters.hometype.includes(`${type.id}`) ||
-                  filters.hometype.includes(type.id)
-                }
-                onChange={handleChange}
-              />
-              <span className={`${tailwindStyles.paragraph}`}>{type.name}</span>
-            </label>
-          ))}
-        </div>
+      <div className="grid grid-cols-2 gap-2">
+        {renderDropdown("city", dropdownData.cityList, "City")}
+        {renderDropdown("builders", dropdownData.builderList, "Builder")}
+        {renderDropdown("community", dropdownData.communityList, "Community")}
       </div>
 
-      <div className="flex flex-col">
-        <p className={`${tailwindStyles.paragraph_b} text-start pb-1`}>
-          Furnishing
-        </p>
-        <div className="grid grid-cols-2">
-          {dropdownData.propertyDescriptions.map((desc) => (
-            <label
-              key={desc.id}
-              className="flex items-center space-x-2 md:w-full"
-            >
-              <input
-                type="checkbox"
-                name="propertydescription"
-                value={desc.id}
-                checked={filters.propertydescription.includes(`${desc.id}`)}
-                onChange={handleChange}
-              />
-              <span className={`${tailwindStyles.paragraph}`}>{desc.name}</span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex flex-col">
-        <p className={`${tailwindStyles.paragraph_b} text-start pb-1`}>
-          Availability
-        </p>
-        <div className="flex flex-wrap">
-          {dropdownData.availability.map((available) => (
-            <label
-              key={available.id}
-              className="flex items-center space-x-2 w-1/2"
-            >
-              <input
-                type="checkbox"
-                name="availability"
-                value={available.id}
-                checked={
-                  filters.availability.includes(`${available.id}`) ||
-                  filters.availability.includes(available.id)
-                }
-                onChange={handleChange}
-              />
-              <span className={`${tailwindStyles.paragraph}`}>
-                {available.name}
-              </span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="flex flex-col">
-        <p className={`${tailwindStyles.paragraph_b} text-start pb-1`}>
-          Preferred Tenant
-        </p>
-        <div className="grid grid-cols-3">
-          {dropdownData.tenanttype.map((tenant) => (
-            <label key={tenant.id} className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                name="tenanttype"
-                value={tenant.id}
-                checked={
-                  filters.tenanttype &&
-                  filters.tenanttype.includes(`${tenant.id}`)
-                }
-                onChange={handleChange}
-              />
-              <span className={`${tailwindStyles.paragraph}`}>
-                {tenant.name}
-              </span>
-            </label>
-          ))}
-        </div>
-      </div>
+      {renderCheckboxGroup(
+        "hometype",
+        dropdownData.bedroomTypes,
+        "House Type",
+        "grid-cols-2 lg:grid-cols-4"
+      )}
+      {renderCheckboxGroup(
+        "propertydescription",
+        dropdownData.propertyDescriptions,
+        "Furnishing",
+        "grid-cols-2"
+      )}
+      {renderCheckboxGroup(
+        "availability",
+        dropdownData.availability,
+        "Availability",
+        "grid-cols-2"
+      )}
+      {renderCheckboxGroup(
+        "tenanttype",
+        dropdownData.tenanttype,
+        "Preferred Tenant",
+        "grid-cols-2 lg:grid-cols-4"
+      )}
 
       <div className="flex space-x-2">
         <button
-          onClick={handleClearFilters}
           type="button"
+          onClick={handleClearFilters}
           className={`${tailwindStyles.secondaryButton} w-full`}
         >
           Clear
         </button>
         <button
-          onClick={handleApplyFilters}
           type="submit"
           className={`${tailwindStyles.secondaryButton} w-full`}
         >
           Apply
         </button>
-       
       </div>
-     
-
     </form>
   );
 
   return (
     <div className="w-full rounded-md bg-white h-auto md:h-full">
       <button
-        className="md:hidden fixed right-0 z-200"
+        className="md:hidden fixed left-2 top-14 z-20"
         onClick={() => setIsShow(!isShow)}
       >
-        <div className="rounded-full h-10 w-10 flex items-center justify-center">
-          <FaFilter className="w-5 h-5 text-[#FFC107]" />
+        <div className="rounded-full h-7 w-7 flex items-center justify-center bg-[#001433]">
+          <FaFilter className="w-3 h-3 text-[#FFC107]" />
         </div>
       </button>
 
@@ -306,7 +252,7 @@ const FilterSection = () => {
 
       {isShow && (
         <div className="fixed inset-0 bg-black bg-opacity-50 z-50">
-          <div className="fixed mr-20 top-0 left-0 sm:w-3/4 md:w-2/4 h-full bg-white shadow-lg z-50 p-4">
+          <div className="fixed top-0 left-0 sm:w-3/4 md:w-2/4 h-full bg-white shadow-lg z-50 p-4">
             <button
               className="absolute top-4 right-4 text-lg"
               onClick={() => setIsShow(false)}

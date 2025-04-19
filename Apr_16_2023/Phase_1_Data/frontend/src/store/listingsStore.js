@@ -1,6 +1,3 @@
-
-// -------------------- without cache -----------------------------
-
 // listingsStore.js
 import { create } from "zustand";
 import apiStatusConstants from "../utils/apiStatusConstants";
@@ -10,6 +7,7 @@ const useListingStore = create((set, get) => ({
   apiResponse: {
     status: apiStatusConstants.initial,
     data: [],
+    count: [],
     errorMsg: null,
   },
   pagination: {
@@ -24,10 +22,16 @@ const useListingStore = create((set, get) => ({
   setCurrentPage: (page) => set({ currentPage: page }),
 
   fetchListings: async (filterData, page = 1, pageLimit = 6) => {
+    // Reset listings if it's a new filter set or page 1
+    const isNewFilterSet =
+      page === 1 ||
+      JSON.stringify(get().filterData) !== JSON.stringify(filterData);
+    const initialData = isNewFilterSet ? [] : get().allListings;
+
     set({
       apiResponse: {
         status: apiStatusConstants.inProgress,
-        data: get().allListings, // Keep existing listings during fetch
+        data: initialData, // Clear data only on new filter or page 1
         errorMsg: null,
       },
       filterData,
@@ -39,16 +43,16 @@ const useListingStore = create((set, get) => ({
         ...filterData,
         hometype: Array.isArray(filterData.hometype)
           ? filterData.hometype.join(",")
-          : filterData.hometype,
+          : filterData.hometype || "",
         propertydescription: Array.isArray(filterData.propertydescription)
           ? filterData.propertydescription.join(",")
-          : filterData.propertydescription,
+          : filterData.propertydescription || "",
         availability: Array.isArray(filterData.availability)
           ? filterData.availability.join(",")
-          : filterData.availability,
+          : filterData.availability || "",
         tenanttype: Array.isArray(filterData.tenanttype)
           ? filterData.tenanttype.join(",")
-          : filterData.tenanttype,
+          : filterData.tenanttype || "",
       };
 
       const result = await fetchAllProperties(updatedFilterData, {
@@ -57,9 +61,10 @@ const useListingStore = create((set, get) => ({
       });
 
       if (result.status) {
-        const newListings = result.data.results;
-        const currentListings = get().allListings;
-        // Append new listings to existing ones, avoiding duplicates
+        const newListings = result.data.results || [];
+        const currentListings = isNewFilterSet ? [] : get().allListings;
+        const countData = result.data.count;
+        // Append new listings, avoiding duplicates
         const updatedListings = [
           ...currentListings,
           ...newListings.filter(
@@ -72,19 +77,22 @@ const useListingStore = create((set, get) => ({
           apiResponse: {
             status: apiStatusConstants.success,
             data: updatedListings,
+            count: countData,
             errorMsg: null,
           },
           pagination: {
-            totalPages: result.data.pagination.totalPages,
-            totalRecords: result.data.pagination.totalRecords,
+            totalPages: result.data.pagination.totalPages || 0,
+            totalRecords: result.data.pagination.totalRecords || 0,
           },
         });
       } else {
+        console.error("API returned failure:", result);
         set({
           apiResponse: {
             status: apiStatusConstants.failure,
-            data: get().allListings,
-            errorMsg: result || "Failed to fetch properties",
+            data: initialData,
+            count: countData,
+            errorMsg: result.message || "Failed to fetch properties",
           },
         });
       }
@@ -93,8 +101,9 @@ const useListingStore = create((set, get) => ({
       set({
         apiResponse: {
           status: apiStatusConstants.failure,
-          data: get().allListings,
-          errorMsg: "Failed to fetch properties",
+          data: initialData,
+          count: countData,
+          errorMsg: error.message || "Failed to fetch properties",
         },
       });
     }
@@ -106,6 +115,7 @@ const useListingStore = create((set, get) => ({
       apiResponse: {
         status: apiStatusConstants.initial,
         data: [],
+        count: [],
         errorMsg: null,
       },
       pagination: {

@@ -1,18 +1,11 @@
+
+// export default useFilterStore;
+
 import { create } from "zustand";
 
 import { fetchFiltersData } from "../services/newapiservices";
 
 const useFilterStore = create((set) => ({
-  // Filter Data State
-  filterData: {
-    city: "",
-    builders: "",
-    community: "",
-    hometype: [],
-    propertydescription: [],
-    availability: [],
-    tenanttype: [],
-  },
   allData: [],
 
   // Dropdown Data State
@@ -27,11 +20,6 @@ const useFilterStore = create((set) => ({
   },
 
   // Actions
-  setFilterData: (data) =>
-    new Promise((resolve) => {
-      set({ filterData: data });
-      resolve();
-    }),
 
   setDropdownData: (data) =>
     set((state) => ({
@@ -48,6 +36,8 @@ const useFilterStore = create((set) => ({
         dropdownData: {
           ...state.dropdownData,
           cityList: resp.data.result.cities,
+          builderList: resp.data.result.builders,
+          communityList: resp.data.result.communities,
           bedroomTypes: resp.data.result.homeTypes,
           propertyDescriptions: resp.data.result.propDesc,
           availability: resp.data.result.availability,
@@ -64,7 +54,7 @@ const useFilterStore = create((set) => ({
       set((state) => {
         const builders =
           state.allData?.builders?.filter(
-            (eachBuilder) => eachBuilder.city_id === cityId
+            (eachBuilder) => eachBuilder.city_name === cityId
           ) || [];
 
         return {
@@ -81,7 +71,7 @@ const useFilterStore = create((set) => ({
       set((state) => {
         const communities =
           state.allData?.communities?.filter(
-            (eachBuilder) => eachBuilder.builder_id === builderId
+            (eachBuilder) => eachBuilder.builder_name === builderId
           ) || [];
 
         return {
@@ -96,15 +86,6 @@ const useFilterStore = create((set) => ({
   resetStore: () => {
     set(
       {
-        filterData: {
-          city: "",
-          builders: "",
-          community: "",
-          hometype: "",
-          propertydescription: "",
-          availability: "",
-          tenanttype: "",
-        },
         dropdownData: {
           cityList: [],
           builderList: [],

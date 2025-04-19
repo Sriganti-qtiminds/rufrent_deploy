@@ -12,1544 +12,1561 @@ const redis = require("../config/redis"); // Import configuration
 const { v4: uuidv4 } = require("uuid");
 const paginate = require("../utils/pagination");
 const TransactionController = require("../utils/transaction");
-const { BetaAnalyticsDataClient } = require('@google-analytics/data');
+const { BetaAnalyticsDataClient } = require("@google-analytics/data");
 
-const client = new BetaAnalyticsDataClient({
-  keyFilename: './config/rufrent-d83b1-3d4e7bd83dbd.json',
-});
+// const client = new BetaAnalyticsDataClient({
+//   keyFilename: './config/rufrent-d83b1-3d4e7bd83dbd.json',
+// });
 
+const credentials = JSON.parse(process.env.GOOGLE_CREDS);
+const client = new BetaAnalyticsDataClient({ credentials });
 
 class PropertyController extends BaseController {
+  async getAllCommunityImg(req, res) {
+    try {
+      const allImages = await S3Service.getAllCommunityImg();
+      return res.status(200).json({
+        success: true,
+        data: allImages,
+      });
+    } catch (error) {
+      console.log("error", error);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to fetch community images.",
+      });
+    }
+  }
 
   async createProperty(req, res) {
+    try {
+      let propertyData = JSON.parse(req.body.propertyData);
+
+      let connection;
+
       try {
-        let propertyData = JSON.parse(req.body.propertyData);
-    
-    
-        let connection;
-    
-        try {
-          // Step 1: Get database connection and start transaction
-          connection = await TransactionController.getConnection();
-          await TransactionController.beginTransaction(connection);
-    
-          // Step 2: Generate a unique UUID for the property
-          let propertyUid;
-          let isUnique = false;
-    
-          while (!isUnique) {
-            propertyUid = uuidv4();
-            const existingProperty = await this.dbService.getRecordsByFields(
-              "dy_property",
-              "uid",
-              `uid = '${propertyUid}'`
-            );
-            if (existingProperty.length === 0) {
-              isUnique = true;
-            }
-          }
-    
-          propertyData.uid = propertyUid; // Add UUID to property data
-    
-          // Step 3: Insert property data into the database
-          await this.dbService.addNewRecord(
+        // Step 1: Get database connection and start transaction
+        connection = await TransactionController.getConnection();
+        await TransactionController.beginTransaction(connection);
+
+        // Step 2: Generate a unique UUID for the property
+        let propertyUid;
+        let isUnique = false;
+
+        while (!isUnique) {
+          propertyUid = uuidv4();
+          const existingProperty = await this.dbService.getRecordsByFields(
             "dy_property",
-            Object.keys(propertyData).join(", "),
-            Object.values(propertyData)
-              .map((val) => db.escape(val))
-              .join(", "),
-            connection
+            "uid",
+            `uid = '${propertyUid}'`
           );
-    
-          // Step 4: Upload property images to S3
-          let folderUrl = await S3Service.uploadImages(
-            req.files,
-            propertyUid,
-            "properties"
-          );
-    
-          // Step 5: Commit the transaction
-          await TransactionController.commitTransaction(connection);
-    
-          // Respond with success
-          return res.status(201).json({
-            message: "Property created successfully",
-            propertyUid,
-          });
-        } catch (error) {
-          console.error("Error creating property:", error.message);
-    
-          // Rollback transaction on error
-          if (connection) {
-            await TransactionController.rollbackTransaction(connection, error.message);
-          }
-    
-          // Respond with error
-          return res.status(500).json({
-            error: "An error occurred while creating the property.",
-            details: error.message,
-          });
-        } finally {
-          // Step 6: Release the database connection
-          if (connection) {
-            await TransactionController.releaseConnection(connection);
+          if (existingProperty.length === 0) {
+            isUnique = true;
           }
         }
-      } catch (error) {
-        // Handle errors outside transaction scope
-        return res.status(500).json({
-          error: "Error parsing property data.",
-          details: error.message,
-        });
-      }
-    }
 
-    async showPropDetails1(req, res) {
-      try {
-        const {
-          page = 1,
-          limit = 6,
-          property_id,
-          city,
-          builders,
-          community,
-          hometype,
-          propertydescription,
-          tenanttype,
-          eat_pref,
-          availability,
-        } = req.query;
-  
-        const sanitizedPage = Math.max(1, parseInt(page, 10));
-        const sanitizedLimit = Math.max(1, parseInt(limit, 10));
-        const offset = (sanitizedPage - 1) * sanitizedLimit;
-        const redisKey = "as1_properties_status3_all";
-  
-        let allProperties = await redis.get(redisKey);
-  
-        if (!allProperties) {
-          const tableName = "dy_property dy";
-          const joinClauses = `${propertyFields}`;
-          const fieldNames = `${fieldNames1}`;
-          allProperties = await this.dbService.getJoinedData(
-            tableName,
-            joinClauses,
-            fieldNames,
-            `dy.current_status = 3 ORDER BY dy.id DESC`
-          );
-          await redis.set(redisKey, JSON.stringify(allProperties));
-          await redis.expire(redisKey, 21600);
-        } else {
-          allProperties = JSON.parse(allProperties);
-        }
-  
-        let filteredProperties = [];
-        let similarResults = [];
-        let similarMessage = "";
-        // **Community + property_id**
-        if (community && property_id) {
-          // Step 1: Properties of the selected community with the selected property_id
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_name == community && property.uid == property_id
-          );
-          // Step 2: Properties of the same community with other property_id
-          let communityOtherProperties = allProperties.filter(
-            (property) =>
-              property.community_name == community && property.uid != property_id
-          );
-          // Step 3: Other properties in the same city by the same builder
-          let sameBuilderOtherProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name == builders &&
-              property.community_name != community &&
-              property.uid != property_id
-          );
-          // Step 4: Other properties in the same city by other builders
-          let otherBuildersProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name != builders &&
-              property.community_name != community &&
-              property.uid != property_id
-          );
-          // Merging the similar results in order
-          similarResults = [
-            ...communityOtherProperties,
-            ...sameBuilderOtherProperties,
-            ...otherBuildersProperties,
-          ];
-  
-          similarMessage = "Showing similar properties based on community name.";
-        }
-        // **Community + hometype**
-        else if (community && hometype) {
-          // Step 1: Properties of the selected community with the selected hometype type
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_name == community &&
-              hometype.includes(String(property.home_type))
-          );
-  
-          // Step 2: Properties of the same community with other hometype types
-          let communityOtherhometype = allProperties.filter(
-            (property) =>
-              property.community_name == community &&
-              !hometype.includes(String(property.home_type))
-          );
-  
-          // Step 3: Other properties in the same city by the same builder
-          let sameBuilderOtherProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name == builders &&
-              property.community_name != community &&
-              hometype.includes(String(property.home_type))
-          );
-  
-          // Step 4: Other properties in the same city by other builders
-          let otherBuildersProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name != builders &&
-              hometype.includes(String(property.home_type))
-          );
-  
-          // Merging the similar results in order
-          similarResults = [
-            ...communityOtherhometype,
-            ...sameBuilderOtherProperties,
-            ...otherBuildersProperties,
-          ];
-  
-          similarMessage =
-            "Showing similar properties based on hometype type, same community, same builder, and other builders in the same city.";
-        }
-        // **Builder + hometype**
-        else if (builders && hometype) {
-          // Step 1: Properties of the selected builder with the selected hometype type
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.builder_name == builders &&
-              hometype.includes(String(property.home_type))
-          );
-  
-          // Step 2: Properties of the same builder with other hometype types
-          let builderOtherHometype = allProperties.filter(
-            (property) =>
-              property.builder_name == builders &&
-              !hometype.includes(String(property.home_type))
-          );
-  
-          // Step 3: Other properties in the same city with the selected hometype but different builders
-          let otherBuildersSameHometype = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name != builders &&
-              hometype.includes(String(property.home_type))
-          );
-  
-          // Step 4: Other properties in the same city with different hometype types and different builders
-          let otherBuildersOtherHometype = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name != builders &&
-              !hometype.includes(String(property.home_type))
-          );
-  
-          // Merging the similar results in order
-          similarResults = [
-            ...builderOtherHometype,
-            ...otherBuildersSameHometype,
-            ...otherBuildersOtherHometype,
-          ];
-  
-          similarMessage =
-            "Showing similar properties based on hometype type, same builder, and other builders in the same city.";
-        }
-  
-        // **City + hometype**
-        else if (city && hometype) {
-          // Step 1: Properties in the selected city with the selected hometype
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              hometype.includes(String(property.home_type))
-          );
-  
-          // Step 2: Properties in the same city with other hometype types
-          let cityOtherHometype = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              !hometype.includes(String(property.home_type))
-          );
-  
-          // Step 3: Properties in other cities with the selected hometype
-          let otherCitiesSameHometype = allProperties.filter(
-            (property) =>
-              property.city_name != city &&
-              hometype.includes(String(property.home_type))
-          );
-  
-          // Step 4: Properties in other cities with other hometype types
-          let otherCitiesOtherHometype = allProperties.filter(
-            (property) =>
-              property.city_name != city &&
-              !hometype.includes(String(property.home_type))
-          );
-  
-          // Merging the similar results in order
-          similarResults = [
-            ...cityOtherHometype,
-            ...otherCitiesSameHometype,
-            ...otherCitiesOtherHometype,
-          ];
-  
-          similarMessage =
-            "Showing similar properties based on hometype type in the same city and other cities.";
-        }
-        // **Community + propertydescription**
-        else if (community && propertydescription) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_name == community &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let otherPropertiesSameCommunity = allProperties.filter(
-            (property) =>
-              property.community_name == community &&
-              !property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let sameBuilderOtherCommunities = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name == builders &&
-              property.community_name != community &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          similarResults = [
-            ...otherPropertiesSameCommunity,
-            ...sameBuilderOtherCommunities,
-          ];
-          similarMessage =
-            "Showing similar properties based on property description for the same community and other communities under the same builder.";
-        }
-  
-        // **Builder + propertydescription**
-        else if (builders && propertydescription) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.builder_name == builders &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let otherPropertiesSameBuilder = allProperties.filter(
-            (property) =>
-              property.builder_name == builders &&
-              !property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let sameCityOtherBuilders = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name != builders &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          similarResults = [
-            ...otherPropertiesSameBuilder,
-            ...sameCityOtherBuilders,
-          ];
-          similarMessage =
-            "Showing similar properties based on property description for the same builder and other builders in the city.";
-        }
-  
-        // **City + propertydescription**
-        else if (city && propertydescription) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let otherPropertiesSameCity = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              !property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let otherCitiesSameDescription = allProperties.filter(
-            (property) =>
-              property.city_name != city &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          similarResults = [
-            ...otherPropertiesSameCity,
-            ...otherCitiesSameDescription,
-          ];
-          similarMessage =
-            "Showing similar properties based on property description in the same city and other cities.";
-        }
-  
-        // **Community + availability**
-        else if (community && availability) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_name == community &&
-              availability.includes(String(property.available_date))
-          );
-  
-          let communityOtherAvailability = allProperties.filter(
-            (property) =>
-              property.community_name == community &&
-              !availability.includes(String(property.available_date))
-          );
-  
-          let sameBuilderOtherProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name == builders &&
-              property.community_name != community &&
-              availability.includes(String(property.available_date))
-          );
-  
-          similarResults = [
-            ...communityOtherAvailability,
-            ...sameBuilderOtherProperties,
-          ];
-          similarMessage =
-            "Showing similar properties based on availability, same community, same builder, and other builders in the city.";
-        }
-        // **Builder + availability**
-        else if (builders && availability) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.builder_name == builders &&
-              availability.includes(String(property.available_date))
-          );
-  
-          let builderOtherAvailability = allProperties.filter(
-            (property) =>
-              property.builder_name == builders &&
-              !availability.includes(String(property.available_date))
-          );
-  
-          let otherBuildersSameAvailability = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name != builders &&
-              availability.includes(String(property.available_date))
-          );
-  
-          similarResults = [
-            ...builderOtherAvailability,
-            ...otherBuildersSameAvailability,
-          ];
-          similarMessage =
-            "Showing similar properties based on availability, same builder, and other builders in the city.";
-        }
-  
-        // **City + availability**
-        else if (city && availability) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              availability.includes(String(property.available_date))
-          );
-  
-          let cityOtherAvailability = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              !availability.includes(String(property.available_date))
-          );
-  
-          let otherCitiesSameAvailability = allProperties.filter(
-            (property) =>
-              property.city_name != city &&
-              availability.includes(String(property.available_date))
-          );
-  
-          similarResults = [
-            ...cityOtherAvailability,
-            ...otherCitiesSameAvailability,
-          ];
-          similarMessage =
-            "Showing similar properties based on availability in the same city and other cities.";
-        }
-  
-        // **Community + Tenant Type
-        else if (community && tenanttype) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_name == community &&
-              tenanttype.includes(String(property.tenant_type))
-          );
-  
-          let communityOtherTenantType = allProperties.filter(
-            (property) =>
-              property.community_name == community &&
-              !tenanttype.includes(String(property.tenant_type))
-          );
-  
-          let sameBuilderOtherProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name == builders &&
-              property.community_name != community &&
-              tenanttype.includes(String(property.tenant_type))
-          );
-  
-          similarResults = [
-            ...communityOtherTenantType,
-            ...sameBuilderOtherProperties,
-          ];
-          similarMessage =
-            "Showing similar properties based on tenant type, same community, same builder, and other builders in the city.";
-        }
-  
-        // **Builder + Tenant Type
-        else if (builders && tenanttype) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.builder_name == builders &&
-              tenanttype.includes(String(property.tenant_type))
-          );
-  
-          let builderOtherTenantType = allProperties.filter(
-            (property) =>
-              property.builder_name == builders &&
-              !tenanttype.includes(String(property.tenant_type))
-          );
-  
-          let otherBuildersSameTenantType = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name != builders &&
-              tenanttype.includes(String(property.tenant_type))
-          );
-  
-          similarResults = [
-            ...builderOtherTenantType,
-            ...otherBuildersSameTenantType,
-          ];
-          similarMessage =
-            "Showing similar properties based on tenant type, same builder, and other builders in the city.";
-        }
-  
-        // **City + Tenant Type
-        else if (city && tenanttype) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              tenanttype.includes(String(property.tenant_type))
-          );
-  
-          let cityOtherTenantType = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              !tenanttype.includes(String(property.tenant_type))
-          );
-  
-          similarResults = [...cityOtherTenantType];
-          similarMessage = "Showing similar properties based on tenant type.";
-        }
-  
-        // Primary filtering
+        propertyData.uid = propertyUid; // Add UUID to property data
 
-        // **Only property id**
-        else if (property_id) {
-          filteredProperties = allProperties.filter(
-            (property) => property.uid == property_id
-          );
-          let propertywithcommunity = allProperties.filter(
-            (property) => property.community_name == filteredProperties[0].community_name
-          );
-          let propertywithothercommunity = allProperties.filter(
-            (property) => property.community_name != filteredProperties[0].community_name
-          );
-          similarResults = [...propertywithcommunity,...propertywithothercommunity];
-          similarResults = similarResults.sort((a, b) => b.id - a.id);
-  
-          similarMessage = "Showing similar properties based on property ID.";
-        }
-  
-        // **Only availability**
-        else if (availability) {
-          filteredProperties = allProperties.filter((property) =>
-            availability.includes(String(property.available_date))
-          );
-  
-          similarResults = allProperties.filter(
-            (property) => !availability.includes(String(property.available_date))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.available_date - a.available_date
-          );
-  
-          similarMessage = "Showing properties based on availability status.";
-        }
-        // **Only eating preference**
-        else if (eat_pref) {
-          filteredProperties = allProperties.filter((property) =>
-            eat_pref.includes(String(property.eat_pref))
-          );
-  
-          similarResults = allProperties.filter(
-            (property) => !eat_pref.includes(String(property.eat_pref))
-          );
-          similarResults = similarResults.sort((a, b) => b.eat_pref - a.eat_pref);
-  
-          similarMessage =
-            "Showing properties matching the selected eating preference.";
-        }
-        // **Only tenant type**
-        else if (tenanttype) {
-          filteredProperties = allProperties.filter((property) =>
-            tenanttype.includes(String(property.tenant_type))
-          );
-  
-          similarResults = allProperties.filter(
-            (property) => !tenanttype.includes(String(property.tenant_type))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.tenant_type - a.tenant_type
-          );
-  
-          similarMessage =
-            "Showing properties suitable for the selected tenant type.";
-        } else if (propertydescription) {
-          filteredProperties = allProperties.filter((property) =>
-            propertydescription.includes(String(property.prop_desc))
-          );
-          //similarResults = allProperties.filter(property => property.home_type_id != hometype).sort((property) => property.home_type_id > hometype)
-  
-          similarResults = allProperties.filter(
-            (property) =>
-              !propertydescription.includes(String(property.prop_desc))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.prop_desc - a.prop_desc
-          );
-  
-          similarMessage =
-            "Showing properties that match the selected propertydesccription type.";
-        } else if (hometype) {
-          filteredProperties = allProperties.filter((property) =>
-            hometype.includes(property.home_type)
-          );
-          filteredProperties = filteredProperties.sort(
-            (a, b) => b.home_type - a.home_type
-          );
-          //similarResults = allProperties.filter(property => property.home_type_id != hometype).sort((property) => property.home_type_id > hometype)
-  
-          similarResults = allProperties.filter(
-            (property) => !hometype.includes(String(property.home_type))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.home_type - a.home_type
-          );
-  
-          similarMessage =
-            "Showing properties that match the selected hometype type.";
-        } else if (community) {
-          filteredProperties = allProperties.filter(
-            (property) => property.community_name == community
-          );
-  
-          similarResults = allProperties.filter(
-            (property) =>
-              property.city_name == city &&
-              property.builder_name == builders &&
-              property.community_name != community
-          );
-  
-          similarMessage =
-            "Showing similar properties from the same city and builder.";
-        } else if (builders) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_name == city && property.builder_name == builders
-          );
-  
-          similarResults = allProperties.filter(
-            (property) =>
-              property.city_name == city && property.builder_name != builders
-          );
-  
-          similarMessage = `Showing similar properties from the same ${city}`;
-        } else if (city) {
-          console.log("🔍 Applying City filter...");
-          filteredProperties = allProperties.filter(
-            (property) => property.city_name == city
-          );
-  
-          similarResults = allProperties.filter(
-            (property) => property.city_name != city
-          );
-  
-          similarMessage = `Showing similar properties from other ${city}`;
-        } else {
-          filteredProperties = allProperties;
-        }
-  
-        // Construct final results
-        const combinedResults = [...filteredProperties];
-  
-        // Insert `similarProperties` only if there are similar properties
-        if (similarResults.length > 0) {
-          combinedResults.push({
-            similarProperties: { message: similarMessage },
-          });
-          combinedResults.push(...similarResults);
-        }
-  
-        const totalRecords = combinedResults.length;
-        const totalPages = Math.ceil(totalRecords / sanitizedLimit);
-        const paginatedProperties = combinedResults.slice(
-          offset,
-          offset + sanitizedLimit
-        );
-  
-        // **Fetching additional details**
-        const enhancedResults = await Promise.all(
-          paginatedProperties.map(async (property) => {
-            const amenities = await this.getAmenities(property.community_id);
-            //const landmarks = await this.landMarks({ community_id: property.community_id });
-            let images = property.uid
-              ? await S3Service.getPropertyImages(property.uid)
-              : [];
-            let defaultImages = property.default_images
-              ? await S3Service.getCommunityImages(property.default_images)
-              : [];
-  
-            return {
-              ...property,
-              images,
-              default_img: defaultImages,
-              amenities,
-            };
-          })
-        );
-  
-        res.status(200).json({
-          message: "Property details fetched successfully",
-          pagination: {
-            currentPage: sanitizedPage,
-            totalPages,
-            totalRecords,
-            limit: sanitizedLimit,
-          },
-          count: {
-            resultsCount: filteredProperties.length,
-            similarCount: similarResults.length,
-          },
-          results: enhancedResults,
-        });
-      } catch (error) {
-        console.error("Error fetching property details:", error.message);
-        res.status(500).json({
-          error: "An error occurred while fetching property details.",
-          details: error.message,
-        });
-      }
-    }
-    async showPropDetails(req, res) {
-      try {
-        const {
-          page = 1,
-          limit = 6,
-          city,
-          builders,
-          community,
-          hometype,
-          propertydescription,
-          tenanttype,
-          eat_pref,
-          availability,
-        } = req.query;
-  
-  
-        const sanitizedPage = Math.max(1, parseInt(page, 10));
-        const sanitizedLimit = Math.max(1, parseInt(limit, 10));
-        const offset = (sanitizedPage - 1) * sanitizedLimit;
-        const redisKey = "as_properties_status3_all_shiva";
-  
-        let allProperties = await redis.get(redisKey);
-  
-        if (!allProperties) {
-          const tableName = "dy_property dy";
-          const joinClauses = `${propertyFields}`;
-          const fieldNames = `${fieldNames1}`;
-          allProperties = await this.dbService.getJoinedData(
-            tableName,
-            joinClauses,
-            fieldNames,
-            `dy.current_status = 3 ORDER BY dy.id DESC`
-          );
-          await redis.set(redisKey, JSON.stringify(allProperties));
-          await redis.expire(redisKey, 21600);
-        } else {
-          allProperties = JSON.parse(allProperties);
-  
-        }
-  
-        let filteredProperties = [];
-        let similarResults = [];
-        let similarMessage = "";
-        // **Community + hometype**
-  
-        if (community && hometype) {
-          // Step 1: Properties of the selected community with the selected hometype type
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_id == community &&
-              hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 2: Properties of the same community with other hometype types
-          let communityOtherhometype = allProperties.filter(
-            (property) =>
-              property.community_id == community &&
-              !hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 3: Other properties in the same city by the same builder
-          let sameBuilderOtherProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id == builders &&
-              property.community_id != community &&
-              hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 4: Other properties in the same city by other builders
-          let otherBuildersProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id != builders &&
-              hometype.includes(String(property.home_type_id))
-          );
-  
-          // Merging the similar results in order
-          similarResults = [
-            ...communityOtherhometype,
-            ...sameBuilderOtherProperties,
-            ...otherBuildersProperties,
-          ];
-  
-          similarMessage =
-            "Showing similar properties based on hometype type, same community, same builder, and other builders in the same city.";
-        }
-        // **Builder + hometype**
-        else if (builders && hometype) {
-          // Step 1: Properties of the selected builder with the selected hometype type
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.builder_id == builders &&
-              hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 2: Properties of the same builder with other hometype types
-          let builderOtherHometype = allProperties.filter(
-            (property) =>
-              property.builder_id == builders &&
-              !hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 3: Other properties in the same city with the selected hometype but different builders
-          let otherBuildersSameHometype = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id != builders &&
-              hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 4: Other properties in the same city with different hometype types and different builders
-          let otherBuildersOtherHometype = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id != builders &&
-              !hometype.includes(String(property.home_type_id))
-          );
-  
-          // Merging the similar results in order
-          similarResults = [
-            ...builderOtherHometype,
-            ...otherBuildersSameHometype,
-            ...otherBuildersOtherHometype,
-          ];
-  
-          similarMessage =
-            "Showing similar properties based on hometype type, same builder, and other builders in the same city.";
-        }
-  
-        // **City + hometype**
-        else if (city && hometype) {
-          // Step 1: Properties in the selected city with the selected hometype
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 2: Properties in the same city with other hometype types
-          let cityOtherHometype = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              !hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 3: Properties in other cities with the selected hometype
-          let otherCitiesSameHometype = allProperties.filter(
-            (property) =>
-              property.city_id != city &&
-              hometype.includes(String(property.home_type_id))
-          );
-  
-          // Step 4: Properties in other cities with other hometype types
-          let otherCitiesOtherHometype = allProperties.filter(
-            (property) =>
-              property.city_id != city &&
-              !hometype.includes(String(property.home_type_id))
-          );
-  
-          // Merging the similar results in order
-          similarResults = [
-            ...cityOtherHometype,
-            ...otherCitiesSameHometype,
-            ...otherCitiesOtherHometype,
-          ];
-  
-          similarMessage =
-            "Showing similar properties based on hometype type in the same city and other cities.";
-        }
-        // **Community + propertydescription**
-        else if (community && propertydescription) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_id == community &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let otherPropertiesSameCommunity = allProperties.filter(
-            (property) =>
-              property.community_id == community &&
-              !property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let sameBuilderOtherCommunities = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id == builders &&
-              property.community_id != community &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          similarResults = [
-            ...otherPropertiesSameCommunity,
-            ...sameBuilderOtherCommunities,
-          ];
-          similarMessage =
-            "Showing similar properties based on property description for the same community and other communities under the same builder.";
-        }
-  
-        // **Builder + propertydescription**
-        else if (builders && propertydescription) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.builder_id == builders &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let otherPropertiesSameBuilder = allProperties.filter(
-            (property) =>
-              property.builder_id == builders &&
-              !property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let sameCityOtherBuilders = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id != builders &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          similarResults = [
-            ...otherPropertiesSameBuilder,
-            ...sameCityOtherBuilders,
-          ];
-          similarMessage =
-            "Showing similar properties based on property description for the same builder and other builders in the city.";
-        }
-  
-        // **City + propertydescription**
-        else if (city && propertydescription) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let otherPropertiesSameCity = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              !property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          let otherCitiesSameDescription = allProperties.filter(
-            (property) =>
-              property.city_id != city &&
-              property.property_description
-                .toLowerCase()
-                .includes(propertydescription.toLowerCase())
-          );
-  
-          similarResults = [
-            ...otherPropertiesSameCity,
-            ...otherCitiesSameDescription,
-          ];
-          similarMessage =
-            "Showing similar properties based on property description in the same city and other cities.";
-        }
-  
-        // **Community + availability**
-        else if (community && availability) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_id == community &&
-              availability.includes(String(property.available_date_id))
-          );
-  
-          let communityOtherAvailability = allProperties.filter(
-            (property) =>
-              property.community_id == community &&
-              !availability.includes(String(property.available_date_id))
-          );
-  
-          let sameBuilderOtherProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id == builders &&
-              property.community_id != community &&
-              availability.includes(String(property.available_date_id))
-          );
-  
-          similarResults = [
-            ...communityOtherAvailability,
-            ...sameBuilderOtherProperties,
-          ];
-          similarMessage =
-            "Showing similar properties based on availability, same community, same builder, and other builders in the city.";
-        }
-        // **Builder + availability**
-        else if (builders && availability) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.builder_id == builders &&
-              availability.includes(String(property.available_date_id))
-          );
-  
-          let builderOtherAvailability = allProperties.filter(
-            (property) =>
-              property.builder_id == builders &&
-              !availability.includes(String(property.available_date_id))
-          );
-  
-          let otherBuildersSameAvailability = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id != builders &&
-              availability.includes(String(property.available_date_id))
-          );
-  
-          similarResults = [
-            ...builderOtherAvailability,
-            ...otherBuildersSameAvailability,
-          ];
-          similarMessage =
-            "Showing similar properties based on availability, same builder, and other builders in the city.";
-        }
-  
-        // **City + availability**
-        else if (city && availability) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              availability.includes(String(property.available_date_id))
-          );
-  
-          let cityOtherAvailability = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              !availability.includes(String(property.available_date_id))
-          );
-  
-          let otherCitiesSameAvailability = allProperties.filter(
-            (property) =>
-              property.city_id != city &&
-              availability.includes(String(property.available_date_id))
-          );
-  
-          similarResults = [
-            ...cityOtherAvailability,
-            ...otherCitiesSameAvailability,
-          ];
-          similarMessage =
-            "Showing similar properties based on availability in the same city and other cities.";
-        }
-  
-        // **Community + Tenant Type
-        else if (community && tenanttype) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.community_id == community &&
-              tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          let communityOtherTenantType = allProperties.filter(
-            (property) =>
-              property.community_id == community &&
-              !tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          let sameBuilderOtherProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id == builders &&
-              property.community_id != community &&
-              tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          similarResults = [
-            ...communityOtherTenantType,
-            ...sameBuilderOtherProperties,
-          ];
-          similarMessage =
-            "Showing similar properties based on tenant type, same community, same builder, and other builders in the city.";
-        }
-  
-        // **Builder + Tenant Type
-        else if (builders && tenanttype) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.builder_id == builders &&
-              tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          let builderOtherTenantType = allProperties.filter(
-            (property) =>
-              property.builder_id == builders &&
-              !tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          let otherBuildersSameTenantType = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id != builders &&
-              tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          similarResults = [
-            ...builderOtherTenantType,
-            ...otherBuildersSameTenantType,
-          ];
-          similarMessage =
-            "Showing similar properties based on tenant type, same builder, and other builders in the city.";
-        }
-  
-        // **City + Tenant Type
-        else if (city && tenanttype) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          let cityOtherTenantType = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              !tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          similarResults = [...cityOtherTenantType];
-          similarMessage = "Showing similar properties based on tenant type.";
-        }
-  
-        // Primary filtering
-  
-        // **Only availability**
-        else if (availability) {
-          filteredProperties = allProperties.filter((property) =>
-            availability.includes(String(property.available_date_id))
-          );
-  
-          similarResults = allProperties.filter(
-            (property) =>
-              !availability.includes(String(property.available_date_id))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.available_date_id - a.available_date_id
-          );
-  
-          similarMessage = "Showing properties based on availability status.";
-        }
-        // **Only eating preference**
-        else if (eat_pref) {
-          filteredProperties = allProperties.filter((property) =>
-            eat_pref.includes(String(property.eat_pref_id))
-          );
-  
-          similarResults = allProperties.filter(
-            (property) => !eat_pref.includes(String(property.eat_pref_id))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.eat_pref_id - a.eat_pref_id
-          );
-  
-          similarMessage =
-            "Showing properties matching the selected eating preference.";
-        }
-        // **Only tenant type**
-        else if (tenanttype) {
-          filteredProperties = allProperties.filter((property) =>
-            tenanttype.includes(String(property.tenant_type_id))
-          );
-  
-          similarResults = allProperties.filter(
-            (property) => !tenanttype.includes(String(property.tenant_type_id))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.tenant_type_id - a.tenant_type_id
-          );
-  
-          similarMessage =
-            "Showing properties suitable for the selected tenant type.";
-        } else if (propertydescription) {
-          filteredProperties = allProperties.filter((property) =>
-            propertydescription.includes(String(property.prop_desc_id))
-          );
-          //similarResults = allProperties.filter(property => property.home_type_id != hometype).sort((property) => property.home_type_id > hometype)
-  
-          similarResults = allProperties.filter(
-            (property) =>
-              !propertydescription.includes(String(property.prop_desc_id))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.prop_desc_id - a.prop_desc_id
-          );
-  
-          similarMessage =
-            "Showing properties that match the selected propertydesccription type.";
-        } else if (hometype) {
-          filteredProperties = allProperties.filter((property) =>
-            hometype.includes(property.home_type_id)
-          );
-          filteredProperties = filteredProperties.sort(
-            (a, b) => b.home_type_id - a.home_type_id
-          );
-          //similarResults = allProperties.filter(property => property.home_type_id != hometype).sort((property) => property.home_type_id > hometype)
-  
-          similarResults = allProperties.filter(
-            (property) => !hometype.includes(String(property.home_type_id))
-          );
-          similarResults = similarResults.sort(
-            (a, b) => b.home_type_id - a.home_type_id
-          );
-  
-          similarMessage =
-            "Showing properties that match the selected hometype type.";
-        } else if (community) {
-          filteredProperties = allProperties.filter(
-            (property) => property.community_id == community
-          );
-  
-          similarResults = allProperties.filter(
-            (property) =>
-              property.city_id == city &&
-              property.builder_id == builders &&
-              property.community_id != community
-          );
-  
-          similarMessage =
-            "Showing similar properties from the same city and builder.";
-        } else if (builders) {
-          filteredProperties = allProperties.filter(
-            (property) =>
-              property.city_id == city && property.builder_id == builders
-          );
-  
-          similarResults = allProperties.filter(
-            (property) =>
-              property.city_id == city && property.builder_id != builders
-          );
-  
-          similarMessage = "Showing similar properties from the same city.";
-        } else if (city) {
-          console.log("🔍 Applying City filter...");
-          filteredProperties = allProperties.filter(
-            (property) => property.city_id == city
-          );
-  
-          similarResults = allProperties.filter(
-            (property) => property.city_id != city
-          );
-  
-          similarMessage = "Showing similar properties from other cities.";
-        } else {
-          filteredProperties = allProperties;
-        }
-  
-        // Construct final results
-        const combinedResults = [...filteredProperties];
-  
-        // Insert `similarProperties` only if there are similar properties
-        if (similarResults.length > 0) {
-          combinedResults.push({
-            similarProperties: { message: similarMessage },
-          });
-          combinedResults.push(...similarResults);
-        }
-  
-        const totalRecords = combinedResults.length;
-        const totalPages = Math.ceil(totalRecords / sanitizedLimit);
-        const paginatedProperties = combinedResults.slice(
-          offset,
-          offset + sanitizedLimit
-        );
-  
-  
-        // **Fetching additional details**
-        const enhancedResults = await Promise.all(
-          paginatedProperties.map(async (property) => {
-            const amenities = await this.getAmenities(property.community_id);
-            //const landmarks = await this.landMarks({ community_id: property.community_id });
-            let images = property.uid
-              ? await S3Service.getPropertyImages(property.uid)
-              : [];
-            let defaultImages = property.default_images
-              ? await S3Service.getCommunityImages(property.default_images)
-              : [];
-  
-            return {
-              ...property,
-              images,
-              default_img: defaultImages,
-              amenities,
-            };
-          })
-        );
-  
-        res.status(200).json({
-          message: "Property details fetched successfully",
-          pagination: {
-            currentPage: sanitizedPage,
-            totalPages,
-            totalRecords,
-            limit: sanitizedLimit,
-          },
-          results: enhancedResults,
-        });
-      } catch (error) {
-        console.error("Error fetching property details:", error.message);
-        res.status(500).json({
-          error: "An error occurred while fetching property details.",
-          details: error.message,
-        });
-      }
-    }
-    async updateProperty(req, res) {
-      try {
-  
-        let propertyData = JSON.parse(req.body.propertyData);
-  
-        const { property_id, removedImages, ...updateFields } = propertyData;
-        const newImages = req.files; // Uploaded images
-  
-        if (!property_id) {
-          return res.status(400).json({ message: "Property ID is required" });
-        }
-  
-        const S3_BASE_URL = `https://${process.env.AWSS3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
-  
-        // **Fetch UID from dy_property**
-        let existingProperty = await this.dbService.getRecordsByFields(
+        // Step 3: Insert property data into the database
+        await this.dbService.addNewRecord(
           "dy_property",
-          "id, uid",
-          `id = ${db.escape(property_id)}`
+          Object.keys(propertyData).join(", "),
+          Object.values(propertyData)
+            .map((val) => db.escape(val))
+            .join(", "),
+          connection
         );
-  
-        existingProperty = existingProperty[0] || null;
-  
-        if (!existingProperty) {
-          return res.status(404).json({ message: "Property not found" });
-        }
-  
-        let { uid } = existingProperty;
-  
-        // **If UID is missing, generate a new one and update dy_property**
-        if (!uid) {
-          uid = uuidv4(); // Generate a new UID
-          await this.dbService.updateRecord(
-            "dy_property",
-            { uid },
-            `id = ${db.escape(property_id)}`
-          );
-        }
-  
-        // **Update Property Details (excluding images)**
-        if (Object.keys(updateFields).length > 0) {
-          await this.dbService.updateRecord(
-            "dy_property",
-            updateFields,
-            `id = ${db.escape(property_id)}`
-          );
-        }
-  
-        // **Set Folder Path using UID**
-        let finalPropertyFolderPath = `properties/${uid}/images`;
-  
-        // 1️⃣ **Delete Removed Images from S3**
-        if (removedImages && removedImages.length > 0) {
-  
-          // Convert full URLs to relative S3 keys
-          const imagesToDelete = removedImages.map((img) =>
-            img.replace(S3_BASE_URL, "")
-          );
-          await S3Service.deleteImage(imagesToDelete);
-        }
-  
-        let uploadedImageUrls = [];
-  
-        // 2️⃣ **Upload New Images to S3**
+
+        // Step 4: Upload property images to S3
         let folderUrl = await S3Service.uploadImages(
-          newImages,
-          uid,
+          req.files,
+          propertyUid,
           "properties"
         );
-  
-  
-  
-        return res.status(200).json({
-          message: "Property updated successfully",
+
+        // Step 5: Commit the transaction
+        await TransactionController.commitTransaction(connection);
+
+        // Respond with success
+        return res.status(201).json({
+          message: "Property created successfully",
+          propertyUid,
         });
       } catch (error) {
-        console.error("Error updating property:", error);
-        res
-          .status(500)
-          .json({ message: "Error updating property", error: error.message });
-      }
-    }
-    async getAmenities(community_id) {
-      try {
-        let rediskey="as_all_community_amenities";
-        let amenities = await redis.hget(rediskey, community_id);
-    
-        if (!amenities) {
-          await this.fetchAndCacheAllAmenities(); // Fetch and cache all amenities if not found
-          amenities = await redis.hget(rediskey, community_id);
+        console.error("Error creating property:", error.message);
+
+        // Rollback transaction on error
+        if (connection) {
+          await TransactionController.rollbackTransaction(
+            connection,
+            error.message
+          );
         }
-    
-        return amenities ? JSON.parse(amenities) : {};
-      } catch (error) {
-        console.error("Error fetching amenities from Redis:", error);
-        return {};
+
+        // Respond with error
+        return res.status(500).json({
+          error: "An error occurred while creating the property.",
+          details: error.message,
+        });
+      } finally {
+        // Step 6: Release the database connection
+        if (connection) {
+          await TransactionController.releaseConnection(connection);
+        }
       }
+    } catch (error) {
+      // Handle errors outside transaction scope
+      return res.status(500).json({
+        error: "Error parsing property data.",
+        details: error.message,
+      });
     }
-    
-    async fetchAndCacheAllAmenities() {
-      try {
-        let allCommunityAmenities = {};
-        const rediskey="as_all_community_amenities"
-    
-        const tableName = `dy_amenities a`;
-        const joinClauses = `
+  }
+
+  async showPropDetails(req, res) {
+    try {
+      const {
+        page = 1,
+        limit = 6,
+        property_id,
+        city,
+        builders,
+        community,
+        hometype,
+        propertydescription,
+        tenanttype,
+        eat_pref,
+        availability,
+      } = req.query;
+
+      const sanitizedPage = Math.max(1, parseInt(page, 10));
+      const sanitizedLimit = Math.max(1, parseInt(limit, 10));
+      const offset = (sanitizedPage - 1) * sanitizedLimit;
+      const redisKey = "properties";
+
+      let allProperties = await redis.get(redisKey);
+
+      if (!allProperties) {
+        const tableName = "dy_property dy";
+        const joinClauses = `${propertyFields}`;
+        const fieldNames = `${fieldNames1}`;
+        allProperties = await this.dbService.getJoinedData(
+          tableName,
+          joinClauses,
+          fieldNames,
+          `dy.current_status = 3 ORDER BY dy.id DESC`
+        );
+        await redis.set(redisKey, JSON.stringify(allProperties));
+        await redis.expire(redisKey, 21600);
+      } else {
+        allProperties = JSON.parse(allProperties);
+      }
+
+      let filteredProperties = [];
+      let similarResults = [];
+      let similarMessage = "";
+      // **Community + property_id**
+      if (community && property_id) {
+        // Step 1: Properties of the selected community with the selected property_id
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_name == community && property.uid == property_id
+        );
+        // Step 2: Properties of the same community with other property_id
+        let communityOtherProperties = allProperties.filter(
+          (property) =>
+            property.community_name == community && property.uid != property_id
+        );
+        // Step 3: Other properties in the same city by the same builder
+        let sameBuilderOtherProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name == builders &&
+            property.community_name != community &&
+            property.uid != property_id
+        );
+        // Step 4: Other properties in the same city by other builders
+        let otherBuildersProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name != builders &&
+            property.community_name != community &&
+            property.uid != property_id
+        );
+        // Merging the similar results in order
+        similarResults = [
+          ...communityOtherProperties,
+          ...sameBuilderOtherProperties,
+          ...otherBuildersProperties,
+        ];
+
+        similarMessage = "Showing similar properties based on community name.";
+      }
+      // **Community + hometype**
+      else if (community && hometype) {
+        // Step 1: Properties of the selected community with the selected hometype type
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_name == community &&
+            hometype.includes(String(property.home_type))
+        );
+
+        // Step 2: Properties of the same community with other hometype types
+        let communityOtherhometype = allProperties.filter(
+          (property) =>
+            property.community_name == community &&
+            !hometype.includes(String(property.home_type))
+        );
+
+        // Step 3: Other properties in the same city by the same builder
+        let sameBuilderOtherProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name == builders &&
+            property.community_name != community &&
+            hometype.includes(String(property.home_type))
+        );
+
+        // Step 4: Other properties in the same city by other builders
+        let otherBuildersProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name != builders &&
+            hometype.includes(String(property.home_type))
+        );
+
+        // Merging the similar results in order
+        similarResults = [
+          ...communityOtherhometype,
+          ...sameBuilderOtherProperties,
+          ...otherBuildersProperties,
+        ];
+
+        similarMessage =
+          "Showing similar properties based on hometype type, same community, same builder, and other builders in the same city.";
+      }
+      // **Builder + hometype**
+      else if (builders && hometype) {
+        // Step 1: Properties of the selected builder with the selected hometype type
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.builder_name == builders &&
+            hometype.includes(String(property.home_type))
+        );
+
+        // Step 2: Properties of the same builder with other hometype types
+        let builderOtherHometype = allProperties.filter(
+          (property) =>
+            property.builder_name == builders &&
+            !hometype.includes(String(property.home_type))
+        );
+
+        // Step 3: Other properties in the same city with the selected hometype but different builders
+        let otherBuildersSameHometype = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name != builders &&
+            hometype.includes(String(property.home_type))
+        );
+
+        // Step 4: Other properties in the same city with different hometype types and different builders
+        let otherBuildersOtherHometype = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name != builders &&
+            !hometype.includes(String(property.home_type))
+        );
+
+        // Merging the similar results in order
+        similarResults = [
+          ...builderOtherHometype,
+          ...otherBuildersSameHometype,
+          ...otherBuildersOtherHometype,
+        ];
+
+        similarMessage =
+          "Showing similar properties based on hometype type, same builder, and other builders in the same city.";
+      }
+
+      // **City + hometype**
+      else if (city && hometype) {
+        // Step 1: Properties in the selected city with the selected hometype
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            hometype.includes(String(property.home_type))
+        );
+
+        // Step 2: Properties in the same city with other hometype types
+        let cityOtherHometype = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            !hometype.includes(String(property.home_type))
+        );
+
+        // Step 3: Properties in other cities with the selected hometype
+        let otherCitiesSameHometype = allProperties.filter(
+          (property) =>
+            property.city_name != city &&
+            hometype.includes(String(property.home_type))
+        );
+
+        // Step 4: Properties in other cities with other hometype types
+        let otherCitiesOtherHometype = allProperties.filter(
+          (property) =>
+            property.city_name != city &&
+            !hometype.includes(String(property.home_type))
+        );
+
+        // Merging the similar results in order
+        similarResults = [
+          ...cityOtherHometype,
+          ...otherCitiesSameHometype,
+          ...otherCitiesOtherHometype,
+        ];
+
+        similarMessage =
+          "Showing similar properties based on hometype type in the same city and other cities.";
+      }
+      // **Community + propertydescription**
+      else if (community && propertydescription) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_name == community &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let otherPropertiesSameCommunity = allProperties.filter(
+          (property) =>
+            property.community_name == community &&
+            !property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let sameBuilderOtherCommunities = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name == builders &&
+            property.community_name != community &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        similarResults = [
+          ...otherPropertiesSameCommunity,
+          ...sameBuilderOtherCommunities,
+        ];
+        similarMessage =
+          "Showing similar properties based on property description for the same community and other communities under the same builder.";
+      }
+
+      // **Builder + propertydescription**
+      else if (builders && propertydescription) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.builder_name == builders &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let otherPropertiesSameBuilder = allProperties.filter(
+          (property) =>
+            property.builder_name == builders &&
+            !property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let sameCityOtherBuilders = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name != builders &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        similarResults = [
+          ...otherPropertiesSameBuilder,
+          ...sameCityOtherBuilders,
+        ];
+        similarMessage =
+          "Showing similar properties based on property description for the same builder and other builders in the city.";
+      }
+
+      // **City + propertydescription**
+      else if (city && propertydescription) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let otherPropertiesSameCity = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            !property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let otherCitiesSameDescription = allProperties.filter(
+          (property) =>
+            property.city_name != city &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        similarResults = [
+          ...otherPropertiesSameCity,
+          ...otherCitiesSameDescription,
+        ];
+        similarMessage =
+          "Showing similar properties based on property description in the same city and other cities.";
+      }
+
+      // **Community + availability**
+      else if (community && availability) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_name == community &&
+            availability.includes(String(property.available_date))
+        );
+
+        let communityOtherAvailability = allProperties.filter(
+          (property) =>
+            property.community_name == community &&
+            !availability.includes(String(property.available_date))
+        );
+
+        let sameBuilderOtherProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name == builders &&
+            property.community_name != community &&
+            availability.includes(String(property.available_date))
+        );
+
+        similarResults = [
+          ...communityOtherAvailability,
+          ...sameBuilderOtherProperties,
+        ];
+        similarMessage =
+          "Showing similar properties based on availability, same community, same builder, and other builders in the city.";
+      }
+      // **Builder + availability**
+      else if (builders && availability) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.builder_name == builders &&
+            availability.includes(String(property.available_date))
+        );
+
+        let builderOtherAvailability = allProperties.filter(
+          (property) =>
+            property.builder_name == builders &&
+            !availability.includes(String(property.available_date))
+        );
+
+        let otherBuildersSameAvailability = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name != builders &&
+            availability.includes(String(property.available_date))
+        );
+
+        similarResults = [
+          ...builderOtherAvailability,
+          ...otherBuildersSameAvailability,
+        ];
+        similarMessage =
+          "Showing similar properties based on availability, same builder, and other builders in the city.";
+      }
+
+      // **City + availability**
+      else if (city && availability) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            availability.includes(String(property.available_date))
+        );
+
+        let cityOtherAvailability = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            !availability.includes(String(property.available_date))
+        );
+
+        let otherCitiesSameAvailability = allProperties.filter(
+          (property) =>
+            property.city_name != city &&
+            availability.includes(String(property.available_date))
+        );
+
+        similarResults = [
+          ...cityOtherAvailability,
+          ...otherCitiesSameAvailability,
+        ];
+        similarMessage =
+          "Showing similar properties based on availability in the same city and other cities.";
+      }
+
+      // **Community + Tenant Type
+      else if (community && tenanttype) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_name == community &&
+            tenanttype.includes(String(property.tenant_type))
+        );
+
+        let communityOtherTenantType = allProperties.filter(
+          (property) =>
+            property.community_name == community &&
+            !tenanttype.includes(String(property.tenant_type))
+        );
+
+        let sameBuilderOtherProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name == builders &&
+            property.community_name != community &&
+            tenanttype.includes(String(property.tenant_type))
+        );
+
+        similarResults = [
+          ...communityOtherTenantType,
+          ...sameBuilderOtherProperties,
+        ];
+        similarMessage =
+          "Showing similar properties based on tenant type, same community, same builder, and other builders in the city.";
+      }
+
+      // **Builder + Tenant Type
+      else if (builders && tenanttype) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.builder_name == builders &&
+            tenanttype.includes(String(property.tenant_type))
+        );
+
+        let builderOtherTenantType = allProperties.filter(
+          (property) =>
+            property.builder_name == builders &&
+            !tenanttype.includes(String(property.tenant_type))
+        );
+
+        let otherBuildersSameTenantType = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name != builders &&
+            tenanttype.includes(String(property.tenant_type))
+        );
+
+        similarResults = [
+          ...builderOtherTenantType,
+          ...otherBuildersSameTenantType,
+        ];
+        similarMessage =
+          "Showing similar properties based on tenant type, same builder, and other builders in the city.";
+      }
+
+      // **City + Tenant Type
+      else if (city && tenanttype) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            tenanttype.includes(String(property.tenant_type))
+        );
+
+        let cityOtherTenantType = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            !tenanttype.includes(String(property.tenant_type))
+        );
+
+        similarResults = [...cityOtherTenantType];
+        similarMessage = "Showing similar properties based on tenant type.";
+      }
+
+      // Primary filtering
+
+      // **Only property id**
+      else if (property_id) {
+        filteredProperties = allProperties.filter(
+          (property) => property.uid == property_id
+        );
+        let propertywithcommunity = allProperties.filter(
+          (property) =>
+            property.community_name == filteredProperties[0].community_name
+        );
+        let propertywithothercommunity = allProperties.filter(
+          (property) =>
+            property.community_name != filteredProperties[0].community_name
+        );
+        similarResults = [
+          ...propertywithcommunity,
+          ...propertywithothercommunity,
+        ];
+        similarResults = similarResults.sort((a, b) => b.id - a.id);
+
+        similarMessage = "Showing similar properties based on property ID.";
+      }
+
+      // **Only availability**
+      else if (availability) {
+        filteredProperties = allProperties.filter((property) =>
+          availability.includes(String(property.available_date))
+        );
+
+        similarResults = allProperties.filter(
+          (property) => !availability.includes(String(property.available_date))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.available_date - a.available_date
+        );
+
+        similarMessage = "Showing properties based on availability status.";
+      }
+      // **Only eating preference**
+      else if (eat_pref) {
+        filteredProperties = allProperties.filter((property) =>
+          eat_pref.includes(String(property.eat_pref))
+        );
+
+        similarResults = allProperties.filter(
+          (property) => !eat_pref.includes(String(property.eat_pref))
+        );
+        similarResults = similarResults.sort((a, b) => b.eat_pref - a.eat_pref);
+
+        similarMessage =
+          "Showing properties matching the selected eating preference.";
+      }
+      // **Only tenant type**
+      else if (tenanttype) {
+        filteredProperties = allProperties.filter((property) =>
+          tenanttype.includes(String(property.tenant_type))
+        );
+
+        similarResults = allProperties.filter(
+          (property) => !tenanttype.includes(String(property.tenant_type))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.tenant_type - a.tenant_type
+        );
+
+        similarMessage =
+          "Showing properties suitable for the selected tenant type.";
+      } else if (propertydescription) {
+        filteredProperties = allProperties.filter((property) =>
+          propertydescription.includes(String(property.prop_desc))
+        );
+        //similarResults = allProperties.filter(property => property.home_type_id != hometype).sort((property) => property.home_type_id > hometype)
+
+        similarResults = allProperties.filter(
+          (property) =>
+            !propertydescription.includes(String(property.prop_desc))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.prop_desc - a.prop_desc
+        );
+
+        similarMessage =
+          "Showing properties that match the selected propertydesccription type.";
+      } else if (hometype) {
+        filteredProperties = allProperties.filter((property) =>
+          hometype.includes(property.home_type)
+        );
+        filteredProperties = filteredProperties.sort(
+          (a, b) => b.home_type - a.home_type
+        );
+        //similarResults = allProperties.filter(property => property.home_type_id != hometype).sort((property) => property.home_type_id > hometype)
+
+        similarResults = allProperties.filter(
+          (property) => !hometype.includes(String(property.home_type))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.home_type - a.home_type
+        );
+
+        similarMessage =
+          "Showing properties that match the selected hometype type.";
+      } else if (community) {
+        filteredProperties = allProperties.filter(
+          (property) => property.community_name == community
+        );
+
+        similarResults = allProperties.filter(
+          (property) =>
+            property.city_name == city &&
+            property.builder_name == builders &&
+            property.community_name != community
+        );
+
+        similarMessage =
+          "Showing similar properties from the same city and builder.";
+      } else if (builders) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_name == city && property.builder_name == builders
+        );
+
+        similarResults = allProperties.filter(
+          (property) =>
+            property.city_name == city && property.builder_name != builders
+        );
+
+        similarMessage = `Showing similar properties from the same ${city}`;
+      } else if (city) {
+        console.log("🔍 Applying City filter...");
+        filteredProperties = allProperties.filter(
+          (property) => property.city_name == city
+        );
+
+        similarResults = allProperties.filter(
+          (property) => property.city_name != city
+        );
+
+        similarMessage = `Showing similar properties from other ${city}`;
+      } else {
+        filteredProperties = allProperties;
+      }
+
+      // Construct final results
+      const combinedResults = [...filteredProperties];
+
+      // Insert `similarProperties` only if there are similar properties
+      if (similarResults.length > 0) {
+        combinedResults.push({
+          similarProperties: { message: similarMessage },
+        });
+        combinedResults.push(...similarResults);
+      }
+
+      const totalRecords = combinedResults.length;
+      const totalPages = Math.ceil(totalRecords / sanitizedLimit);
+      const paginatedProperties = combinedResults.slice(
+        offset,
+        offset + sanitizedLimit
+      );
+
+      // **Fetching additional details**
+      const enhancedResults = await Promise.all(
+        paginatedProperties.map(async (property) => {
+          const amenities = await this.getAmenities(property.community_id);
+          //const landmarks = await this.landMarks({ community_id: property.community_id });
+          let images = property.uid
+            ? await S3Service.getPropertyImages(property.uid)
+            : [];
+          let defaultImages = property.default_images
+            ? await S3Service.getCommunityImages(property.default_images)
+            : [];
+
+          return {
+            ...property,
+            images,
+            default_img: defaultImages,
+            amenities,
+          };
+        })
+      );
+
+      res.status(200).json({
+        message: "Property details fetched successfully",
+        pagination: {
+          currentPage: sanitizedPage,
+          totalPages,
+          totalRecords,
+          limit: sanitizedLimit,
+        },
+        count: {
+          resultsCount: filteredProperties.length,
+          similarCount: similarResults.length,
+        },
+        results: enhancedResults,
+      });
+    } catch (error) {
+      console.error("Error fetching property details:", error.message);
+      res.status(500).json({
+        error: "An error occurred while fetching property details.",
+        details: error.message,
+      });
+    }
+  }
+  async showPropDetails1(req, res) {
+    try {
+      const {
+        page = 1,
+        limit = 6,
+        city,
+        builders,
+        community,
+        hometype,
+        propertydescription,
+        tenanttype,
+        eat_pref,
+        availability,
+      } = req.query;
+
+      const sanitizedPage = Math.max(1, parseInt(page, 10));
+      const sanitizedLimit = Math.max(1, parseInt(limit, 10));
+      const offset = (sanitizedPage - 1) * sanitizedLimit;
+      const redisKey = "as_properties_status3_all_shiva";
+
+      let allProperties = await redis.get(redisKey);
+
+      if (!allProperties) {
+        const tableName = "dy_property dy";
+        const joinClauses = `${propertyFields}`;
+        const fieldNames = `${fieldNames1}`;
+        allProperties = await this.dbService.getJoinedData(
+          tableName,
+          joinClauses,
+          fieldNames,
+          `dy.current_status = 3 ORDER BY dy.id DESC`
+        );
+        await redis.set(redisKey, JSON.stringify(allProperties));
+        await redis.expire(redisKey, 21600);
+      } else {
+        allProperties = JSON.parse(allProperties);
+      }
+
+      let filteredProperties = [];
+      let similarResults = [];
+      let similarMessage = "";
+      // **Community + hometype**
+
+      if (community && hometype) {
+        // Step 1: Properties of the selected community with the selected hometype type
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_id == community &&
+            hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 2: Properties of the same community with other hometype types
+        let communityOtherhometype = allProperties.filter(
+          (property) =>
+            property.community_id == community &&
+            !hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 3: Other properties in the same city by the same builder
+        let sameBuilderOtherProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id == builders &&
+            property.community_id != community &&
+            hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 4: Other properties in the same city by other builders
+        let otherBuildersProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id != builders &&
+            hometype.includes(String(property.home_type_id))
+        );
+
+        // Merging the similar results in order
+        similarResults = [
+          ...communityOtherhometype,
+          ...sameBuilderOtherProperties,
+          ...otherBuildersProperties,
+        ];
+
+        similarMessage =
+          "Showing similar properties based on hometype type, same community, same builder, and other builders in the same city.";
+      }
+      // **Builder + hometype**
+      else if (builders && hometype) {
+        // Step 1: Properties of the selected builder with the selected hometype type
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.builder_id == builders &&
+            hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 2: Properties of the same builder with other hometype types
+        let builderOtherHometype = allProperties.filter(
+          (property) =>
+            property.builder_id == builders &&
+            !hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 3: Other properties in the same city with the selected hometype but different builders
+        let otherBuildersSameHometype = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id != builders &&
+            hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 4: Other properties in the same city with different hometype types and different builders
+        let otherBuildersOtherHometype = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id != builders &&
+            !hometype.includes(String(property.home_type_id))
+        );
+
+        // Merging the similar results in order
+        similarResults = [
+          ...builderOtherHometype,
+          ...otherBuildersSameHometype,
+          ...otherBuildersOtherHometype,
+        ];
+
+        similarMessage =
+          "Showing similar properties based on hometype type, same builder, and other builders in the same city.";
+      }
+
+      // **City + hometype**
+      else if (city && hometype) {
+        // Step 1: Properties in the selected city with the selected hometype
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 2: Properties in the same city with other hometype types
+        let cityOtherHometype = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            !hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 3: Properties in other cities with the selected hometype
+        let otherCitiesSameHometype = allProperties.filter(
+          (property) =>
+            property.city_id != city &&
+            hometype.includes(String(property.home_type_id))
+        );
+
+        // Step 4: Properties in other cities with other hometype types
+        let otherCitiesOtherHometype = allProperties.filter(
+          (property) =>
+            property.city_id != city &&
+            !hometype.includes(String(property.home_type_id))
+        );
+
+        // Merging the similar results in order
+        similarResults = [
+          ...cityOtherHometype,
+          ...otherCitiesSameHometype,
+          ...otherCitiesOtherHometype,
+        ];
+
+        similarMessage =
+          "Showing similar properties based on hometype type in the same city and other cities.";
+      }
+      // **Community + propertydescription**
+      else if (community && propertydescription) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_id == community &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let otherPropertiesSameCommunity = allProperties.filter(
+          (property) =>
+            property.community_id == community &&
+            !property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let sameBuilderOtherCommunities = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id == builders &&
+            property.community_id != community &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        similarResults = [
+          ...otherPropertiesSameCommunity,
+          ...sameBuilderOtherCommunities,
+        ];
+        similarMessage =
+          "Showing similar properties based on property description for the same community and other communities under the same builder.";
+      }
+
+      // **Builder + propertydescription**
+      else if (builders && propertydescription) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.builder_id == builders &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let otherPropertiesSameBuilder = allProperties.filter(
+          (property) =>
+            property.builder_id == builders &&
+            !property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let sameCityOtherBuilders = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id != builders &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        similarResults = [
+          ...otherPropertiesSameBuilder,
+          ...sameCityOtherBuilders,
+        ];
+        similarMessage =
+          "Showing similar properties based on property description for the same builder and other builders in the city.";
+      }
+
+      // **City + propertydescription**
+      else if (city && propertydescription) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let otherPropertiesSameCity = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            !property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        let otherCitiesSameDescription = allProperties.filter(
+          (property) =>
+            property.city_id != city &&
+            property.property_description
+              .toLowerCase()
+              .includes(propertydescription.toLowerCase())
+        );
+
+        similarResults = [
+          ...otherPropertiesSameCity,
+          ...otherCitiesSameDescription,
+        ];
+        similarMessage =
+          "Showing similar properties based on property description in the same city and other cities.";
+      }
+
+      // **Community + availability**
+      else if (community && availability) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_id == community &&
+            availability.includes(String(property.available_date_id))
+        );
+
+        let communityOtherAvailability = allProperties.filter(
+          (property) =>
+            property.community_id == community &&
+            !availability.includes(String(property.available_date_id))
+        );
+
+        let sameBuilderOtherProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id == builders &&
+            property.community_id != community &&
+            availability.includes(String(property.available_date_id))
+        );
+
+        similarResults = [
+          ...communityOtherAvailability,
+          ...sameBuilderOtherProperties,
+        ];
+        similarMessage =
+          "Showing similar properties based on availability, same community, same builder, and other builders in the city.";
+      }
+      // **Builder + availability**
+      else if (builders && availability) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.builder_id == builders &&
+            availability.includes(String(property.available_date_id))
+        );
+
+        let builderOtherAvailability = allProperties.filter(
+          (property) =>
+            property.builder_id == builders &&
+            !availability.includes(String(property.available_date_id))
+        );
+
+        let otherBuildersSameAvailability = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id != builders &&
+            availability.includes(String(property.available_date_id))
+        );
+
+        similarResults = [
+          ...builderOtherAvailability,
+          ...otherBuildersSameAvailability,
+        ];
+        similarMessage =
+          "Showing similar properties based on availability, same builder, and other builders in the city.";
+      }
+
+      // **City + availability**
+      else if (city && availability) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            availability.includes(String(property.available_date_id))
+        );
+
+        let cityOtherAvailability = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            !availability.includes(String(property.available_date_id))
+        );
+
+        let otherCitiesSameAvailability = allProperties.filter(
+          (property) =>
+            property.city_id != city &&
+            availability.includes(String(property.available_date_id))
+        );
+
+        similarResults = [
+          ...cityOtherAvailability,
+          ...otherCitiesSameAvailability,
+        ];
+        similarMessage =
+          "Showing similar properties based on availability in the same city and other cities.";
+      }
+
+      // **Community + Tenant Type
+      else if (community && tenanttype) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.community_id == community &&
+            tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        let communityOtherTenantType = allProperties.filter(
+          (property) =>
+            property.community_id == community &&
+            !tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        let sameBuilderOtherProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id == builders &&
+            property.community_id != community &&
+            tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        similarResults = [
+          ...communityOtherTenantType,
+          ...sameBuilderOtherProperties,
+        ];
+        similarMessage =
+          "Showing similar properties based on tenant type, same community, same builder, and other builders in the city.";
+      }
+
+      // **Builder + Tenant Type
+      else if (builders && tenanttype) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.builder_id == builders &&
+            tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        let builderOtherTenantType = allProperties.filter(
+          (property) =>
+            property.builder_id == builders &&
+            !tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        let otherBuildersSameTenantType = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id != builders &&
+            tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        similarResults = [
+          ...builderOtherTenantType,
+          ...otherBuildersSameTenantType,
+        ];
+        similarMessage =
+          "Showing similar properties based on tenant type, same builder, and other builders in the city.";
+      }
+
+      // **City + Tenant Type
+      else if (city && tenanttype) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        let cityOtherTenantType = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            !tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        similarResults = [...cityOtherTenantType];
+        similarMessage = "Showing similar properties based on tenant type.";
+      }
+
+      // Primary filtering
+
+      // **Only availability**
+      else if (availability) {
+        filteredProperties = allProperties.filter((property) =>
+          availability.includes(String(property.available_date_id))
+        );
+
+        similarResults = allProperties.filter(
+          (property) =>
+            !availability.includes(String(property.available_date_id))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.available_date_id - a.available_date_id
+        );
+
+        similarMessage = "Showing properties based on availability status.";
+      }
+      // **Only eating preference**
+      else if (eat_pref) {
+        filteredProperties = allProperties.filter((property) =>
+          eat_pref.includes(String(property.eat_pref_id))
+        );
+
+        similarResults = allProperties.filter(
+          (property) => !eat_pref.includes(String(property.eat_pref_id))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.eat_pref_id - a.eat_pref_id
+        );
+
+        similarMessage =
+          "Showing properties matching the selected eating preference.";
+      }
+      // **Only tenant type**
+      else if (tenanttype) {
+        filteredProperties = allProperties.filter((property) =>
+          tenanttype.includes(String(property.tenant_type_id))
+        );
+
+        similarResults = allProperties.filter(
+          (property) => !tenanttype.includes(String(property.tenant_type_id))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.tenant_type_id - a.tenant_type_id
+        );
+
+        similarMessage =
+          "Showing properties suitable for the selected tenant type.";
+      } else if (propertydescription) {
+        filteredProperties = allProperties.filter((property) =>
+          propertydescription.includes(String(property.prop_desc_id))
+        );
+        //similarResults = allProperties.filter(property => property.home_type_id != hometype).sort((property) => property.home_type_id > hometype)
+
+        similarResults = allProperties.filter(
+          (property) =>
+            !propertydescription.includes(String(property.prop_desc_id))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.prop_desc_id - a.prop_desc_id
+        );
+
+        similarMessage =
+          "Showing properties that match the selected propertydesccription type.";
+      } else if (hometype) {
+        filteredProperties = allProperties.filter((property) =>
+          hometype.includes(property.home_type_id)
+        );
+        filteredProperties = filteredProperties.sort(
+          (a, b) => b.home_type_id - a.home_type_id
+        );
+        //similarResults = allProperties.filter(property => property.home_type_id != hometype).sort((property) => property.home_type_id > hometype)
+
+        similarResults = allProperties.filter(
+          (property) => !hometype.includes(String(property.home_type_id))
+        );
+        similarResults = similarResults.sort(
+          (a, b) => b.home_type_id - a.home_type_id
+        );
+
+        similarMessage =
+          "Showing properties that match the selected hometype type.";
+      } else if (community) {
+        filteredProperties = allProperties.filter(
+          (property) => property.community_id == community
+        );
+
+        similarResults = allProperties.filter(
+          (property) =>
+            property.city_id == city &&
+            property.builder_id == builders &&
+            property.community_id != community
+        );
+
+        similarMessage =
+          "Showing similar properties from the same city and builder.";
+      } else if (builders) {
+        filteredProperties = allProperties.filter(
+          (property) =>
+            property.city_id == city && property.builder_id == builders
+        );
+
+        similarResults = allProperties.filter(
+          (property) =>
+            property.city_id == city && property.builder_id != builders
+        );
+
+        similarMessage = "Showing similar properties from the same city.";
+      } else if (city) {
+        console.log("🔍 Applying City filter...");
+        filteredProperties = allProperties.filter(
+          (property) => property.city_id == city
+        );
+
+        similarResults = allProperties.filter(
+          (property) => property.city_id != city
+        );
+
+        similarMessage = "Showing similar properties from other cities.";
+      } else {
+        filteredProperties = allProperties;
+      }
+
+      // Construct final results
+      const combinedResults = [...filteredProperties];
+
+      // Insert `similarProperties` only if there are similar properties
+      if (similarResults.length > 0) {
+        combinedResults.push({
+          similarProperties: { message: similarMessage },
+        });
+        combinedResults.push(...similarResults);
+      }
+
+      const totalRecords = combinedResults.length;
+      const totalPages = Math.ceil(totalRecords / sanitizedLimit);
+      const paginatedProperties = combinedResults.slice(
+        offset,
+        offset + sanitizedLimit
+      );
+
+      // **Fetching additional details**
+      const enhancedResults = await Promise.all(
+        paginatedProperties.map(async (property) => {
+          const amenities = await this.getAmenities(property.community_id);
+          //const landmarks = await this.landMarks({ community_id: property.community_id });
+          let images = property.uid
+            ? await S3Service.getPropertyImages(property.uid)
+            : [];
+          let defaultImages = property.default_images
+            ? await S3Service.getCommunityImages(property.default_images)
+            : [];
+
+          return {
+            ...property,
+            images,
+            default_img: defaultImages,
+            amenities,
+          };
+        })
+      );
+
+      res.status(200).json({
+        message: "Property details fetched successfully",
+        pagination: {
+          currentPage: sanitizedPage,
+          totalPages,
+          totalRecords,
+          limit: sanitizedLimit,
+        },
+        results: enhancedResults,
+      });
+    } catch (error) {
+      console.error("Error fetching property details:", error.message);
+      res.status(500).json({
+        error: "An error occurred while fetching property details.",
+        details: error.message,
+      });
+    }
+  }
+  async updateProperty(req, res) {
+    try {
+      let propertyData = JSON.parse(req.body.propertyData);
+
+      const { property_id, removedImages, ...updateFields } = propertyData;
+      const newImages = req.files; // Uploaded images
+
+      if (!property_id) {
+        return res.status(400).json({ message: "Property ID is required" });
+      }
+
+      const S3_BASE_URL = `https://${process.env.AWSS3_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/`;
+
+      // **Fetch UID from dy_property**
+      let existingProperty = await this.dbService.getRecordsByFields(
+        "dy_property",
+        "id, uid",
+        `id = ${db.escape(property_id)}`
+      );
+
+      existingProperty = existingProperty[0] || null;
+
+      if (!existingProperty) {
+        return res.status(404).json({ message: "Property not found" });
+      }
+
+      let { uid } = existingProperty;
+
+      // **If UID is missing, generate a new one and update dy_property**
+      if (!uid) {
+        uid = uuidv4(); // Generate a new UID
+        await this.dbService.updateRecord(
+          "dy_property",
+          { uid },
+          `id = ${db.escape(property_id)}`
+        );
+      }
+
+      // **Update Property Details (excluding images)**
+      if (Object.keys(updateFields).length > 0) {
+        await this.dbService.updateRecord(
+          "dy_property",
+          updateFields,
+          `id = ${db.escape(property_id)}`
+        );
+      }
+
+      // **Set Folder Path using UID**
+      let finalPropertyFolderPath = `properties/${uid}/images`;
+
+      // 1️⃣ **Delete Removed Images from S3**
+      if (removedImages && removedImages.length > 0) {
+        // Convert full URLs to relative S3 keys
+        const imagesToDelete = removedImages.map((img) =>
+          img.replace(S3_BASE_URL, "")
+        );
+        await S3Service.deleteImage(imagesToDelete);
+      }
+
+      let uploadedImageUrls = [];
+
+      // 2️⃣ **Upload New Images to S3**
+      let folderUrl = await S3Service.uploadImages(
+        newImages,
+        uid,
+        "properties"
+      );
+
+      return res.status(200).json({
+        message: "Property updated successfully",
+      });
+    } catch (error) {
+      console.error("Error updating property:", error);
+      res
+        .status(500)
+        .json({ message: "Error updating property", error: error.message });
+    }
+  }
+  async getAmenities(community_id) {
+    try {
+      let rediskey = "as_all_community_amenities";
+      let amenities = await redis.hget(rediskey, community_id);
+
+      if (!amenities) {
+        await this.fetchAndCacheAllAmenities(); // Fetch and cache all amenities if not found
+        amenities = await redis.hget(rediskey, community_id);
+      }
+
+      return amenities ? JSON.parse(amenities) : {};
+    } catch (error) {
+      console.error("Error fetching amenities from Redis:", error);
+      return {};
+    }
+  }
+
+  async fetchAndCacheAllAmenities() {
+    try {
+      let allCommunityAmenities = {};
+      const rediskey = "as_all_community_amenities";
+
+      const tableName = `dy_amenities a`;
+      const joinClauses = `
               LEFT JOIN st_amenities sa ON a.amenity = sa.id
               LEFT JOIN st_amenity_category sac ON sa.amenity_category_id = sac.id
               LEFT JOIN st_community sc ON a.community = sc.id
           `;
-        const fieldNames = `
+      const fieldNames = `
               sc.id AS community_id, 
               sa.amenity_name,
               sac.amenity_category
           `;
-    
-        const allAmenities = await this.dbService.getJoinedData(
-          tableName,
-          joinClauses,
-          fieldNames,
-          `1`
-        );
-    
-        // ✅ Structuring data properly
-        allAmenities.forEach((item) => {
-          const communityId = item.community_id;
-          const category = item.amenity_category;
-          const amenity = item.amenity_name;
-    
-          if (!allCommunityAmenities[communityId]) {
-            allCommunityAmenities[communityId] = {};
-          }
-          if (!allCommunityAmenities[communityId][category]) {
-            allCommunityAmenities[communityId][category] = [];
-          }
-          allCommunityAmenities[communityId][category].push(amenity);
-        });
-    
-        // ✅ Store all community amenities in Redis as hash using community_id
-        if (Object.keys(allCommunityAmenities).length > 0) {
-          await Promise.all(
-            Object.entries(allCommunityAmenities).map(([communityId, categories]) =>
-              redis.hset(rediskey, communityId, JSON.stringify(categories))
-            )
-          );
-        }
-    
-        return allCommunityAmenities;
-      } catch (error) {
-        console.error("Error fetching and caching amenities:", error);
-        return {};
-      }
-    }
 
+      const allAmenities = await this.dbService.getJoinedData(
+        tableName,
+        joinClauses,
+        fieldNames,
+        `1`
+      );
+
+      // ✅ Structuring data properly
+      allAmenities.forEach((item) => {
+        const communityId = item.community_id;
+        const category = item.amenity_category;
+        const amenity = item.amenity_name;
+
+        if (!allCommunityAmenities[communityId]) {
+          allCommunityAmenities[communityId] = {};
+        }
+        if (!allCommunityAmenities[communityId][category]) {
+          allCommunityAmenities[communityId][category] = [];
+        }
+        allCommunityAmenities[communityId][category].push(amenity);
+      });
+
+      // ✅ Store all community amenities in Redis as hash using community_id
+      if (Object.keys(allCommunityAmenities).length > 0) {
+        await Promise.all(
+          Object.entries(allCommunityAmenities).map(
+            ([communityId, categories]) =>
+              redis.hset(rediskey, communityId, JSON.stringify(categories))
+          )
+        );
+      }
+
+      return allCommunityAmenities;
+    } catch (error) {
+      console.error("Error fetching and caching amenities:", error);
+      return {};
+    }
+  }
 
   async userPropDetails(req, res) {
     try {
@@ -1638,7 +1655,6 @@ class PropertyController extends BaseController {
     }
   }
 
-
   async landMarks({ community_id }) {
     try {
       const tableName = `dy_landmarks dl`;
@@ -1679,9 +1695,9 @@ class PropertyController extends BaseController {
     }
   }
 
-  async filterdata1(req, res) {
+  async filterdata(req, res) {
     try {
-      const cacheKey = "firt_filtered_data";
+      const cacheKey = "filtered_data";
 
       // Check if data is cached
       const cachedData = await redis.get(cacheKey);
@@ -1772,7 +1788,7 @@ class PropertyController extends BaseController {
       });
     }
   }
-  async filterdata(req, res) {
+  async filterdata1(req, res) {
     try {
       const cacheKey = "filtered_data";
 
@@ -1792,7 +1808,7 @@ class PropertyController extends BaseController {
         availability: "st_availability",
         propDesc: "st_prop_desc",
         tenants: "st_tenant",
-        facing:"st_prop_facing",
+        facing: "st_prop_facing",
       };
 
       // Define fields to fetch from each table
@@ -1804,7 +1820,7 @@ class PropertyController extends BaseController {
         availability: "id, available as name",
         propDesc: "id, prop_desc as name",
         tenants: "id, tenant_type as name",
-        facing:"id,prop_facing as name"
+        facing: "id,prop_facing as name",
       };
 
       // Active condition for all tables except availability
@@ -1842,7 +1858,7 @@ class PropertyController extends BaseController {
           tenantTypes: Array.from(
             data[6].sort((a, b) => a.name.localeCompare(b.name))
           ),
-          facing:data[7],
+          facing: data[7],
         },
       };
 
@@ -1882,8 +1898,7 @@ class PropertyController extends BaseController {
         tenantEatPrefs: "st_tenant_eat_pref",
         st_prop_type: "st_prop_type",
         availability: "st_availability",
-        facing:"st_prop_facing",
-
+        facing: "st_prop_facing",
       };
 
       const activeCondition = "rstatus = 1";
@@ -1901,8 +1916,7 @@ class PropertyController extends BaseController {
         tenantEatPrefs: "id, eat_pref",
         st_prop_type: "id, prop_type",
         availability: "id, available",
-        facing:"id,prop_facing as name"
-
+        facing: "id,prop_facing as name",
       };
 
       const data = await Promise.all(
@@ -1944,7 +1958,7 @@ class PropertyController extends BaseController {
 
           propType: data[11],
           availability: data[12],
-          facing:data[13],
+          facing: data[13],
         },
       };
 
@@ -2097,7 +2111,6 @@ class UserActionsController extends BaseController {
   async getUserActions(req, res) {
     try {
       const { user_id } = req.query;
-
 
       let userProperties = [];
       if (user_id) {
@@ -2598,7 +2611,7 @@ class UserController extends BaseController {
 
   async addChatbotEntry(req, res) {
     const { name, city, mobile_no, time_slot, purpose } = req.body;
-  
+
     // Validate input
     if (!name || !city || !mobile_no || !time_slot) {
       return res.status(400).json({
@@ -2606,34 +2619,34 @@ class UserController extends BaseController {
         message: "All fields (name, city, mobile_no, time_slot) are required.",
       });
     }
-  
+
     let connection;
-  
+
     try {
       // Step 1: Get database connection and start transaction
       connection = await TransactionController.getConnection();
       await TransactionController.beginTransaction(connection);
-  
+
       const tableName = "dy_enquiries";
-  
+
       // Step 2: Insert data into the database
       const fieldNames = "name, city, mobile_number, time_slot, purpose";
       const fieldValues = `${db.escape(name)}, ${db.escape(city)}, ${db.escape(
         mobile_no
       )}, ${db.escape(time_slot)}, ${db.escape(purpose)}`;
-  
+
       const result = await this.dbService.addNewRecord(
         tableName,
         fieldNames,
         fieldValues,
         connection
       );
-  
+
       console.log("User entry added successfully:", result);
-  
+
       // Step 3: Commit the transaction
       await TransactionController.commitTransaction(connection);
-  
+
       // Respond with success
       return res.status(201).json({
         success: true,
@@ -2642,12 +2655,15 @@ class UserController extends BaseController {
       });
     } catch (error) {
       console.error("Error in addChatbotEntry:", error.message);
-  
+
       // Step 4: Rollback transaction on error
       if (connection) {
-        await TransactionController.rollbackTransaction(connection, error.message);
+        await TransactionController.rollbackTransaction(
+          connection,
+          error.message
+        );
       }
-  
+
       // Handle duplicate entry error
       if (error.code === "ER_DUP_ENTRY") {
         return res.status(409).json({
@@ -2655,7 +2671,7 @@ class UserController extends BaseController {
           message: "Data already exists for this mobile number.",
         });
       }
-  
+
       // Respond with a generic error
       return res.status(500).json({
         success: false,
@@ -2892,25 +2908,30 @@ class LandMarksController extends BaseController {
 }
 
 class AmenitiesController extends BaseController {
-async addAmenities(req, res) {
+  async addAmenities(req, res) {
     const { community_id, amenity_ids } = req.body;
-  
+
     // Validate input
-    if (!community_id || !Array.isArray(amenity_ids) || amenity_ids.length === 0) {
+    if (
+      !community_id ||
+      !Array.isArray(amenity_ids) ||
+      amenity_ids.length === 0
+    ) {
       return res.status(400).json({
-        error: "Invalid input. Provide a valid community ID and an array of amenity IDs.",
+        error:
+          "Invalid input. Provide a valid community ID and an array of amenity IDs.",
       });
     }
-  
+
     let connection;
-  
+
     try {
       // Step 1: Get database connection and start transaction
       connection = await TransactionController.getConnection();
       await TransactionController.beginTransaction(connection);
-  
+
       const tableName = "dy_amenities";
-  
+
       // Step 2: Retrieve existing amenities for the community
       const whereCondition = `community = ${db.escape(community_id)}`;
       const existingRecords = await this.dbService.getRecordsByFields(
@@ -2918,12 +2939,14 @@ async addAmenities(req, res) {
         "amenity",
         whereCondition
       );
-  
-      const existingAmenityIds = existingRecords.map((record) => record.amenity);
+
+      const existingAmenityIds = existingRecords.map(
+        (record) => record.amenity
+      );
       const newAmenities = amenity_ids.filter(
         (amenityId) => !existingAmenityIds.includes(amenityId)
       );
-  
+
       // If no new amenities, rollback transaction and return
       if (newAmenities.length === 0) {
         await TransactionController.rollbackTransaction(
@@ -2934,19 +2957,25 @@ async addAmenities(req, res) {
           message: "All amenities already exist for this community.",
         });
       }
-  
+
       // Step 3: Insert new amenities and related records
       for (const amenityId of newAmenities) {
         // Insert into dy_amenities table
         const fieldNames = `amenity, community`;
-        const fieldValues = `${db.escape(amenityId)}, ${db.escape(community_id)}`;
-        await this.dbService.addNewRecord(tableName, fieldNames, fieldValues, connection);
-  
+        const fieldValues = `${db.escape(amenityId)}, ${db.escape(
+          community_id
+        )}`;
+        await this.dbService.addNewRecord(
+          tableName,
+          fieldNames,
+          fieldValues,
+          connection
+        );
       }
-  
+
       // Step 4: Commit the transaction
       await TransactionController.commitTransaction(connection);
-  
+
       // Respond with success
       res.status(200).json({
         message: "New amenities added successfully.",
@@ -2954,12 +2983,15 @@ async addAmenities(req, res) {
       });
     } catch (error) {
       console.error("Error adding amenities:", error.message);
-  
+
       // Step 5: Rollback transaction on error
       if (connection) {
-        await TransactionController.rollbackTransaction(connection, error.message);
+        await TransactionController.rollbackTransaction(
+          connection,
+          error.message
+        );
       }
-  
+
       // Respond with error
       res.status(500).json({
         error: "An error occurred while adding amenities.",
@@ -3051,16 +3083,16 @@ async addAmenities(req, res) {
 
   async createCommunity(req, res) {
     let connection;
-  
+
     try {
       let communityData = JSON.parse(req.body.communityData);
       const communityUid = uuidv4(); // Generate UUID for community
       communityData.uid = communityUid; // Store UUID in database
-  
+
       // Step 1: Get database connection and start transaction
       connection = await TransactionController.getConnection();
       await TransactionController.beginTransaction(connection);
-  
+
       // Step 2: Insert community data into the database
       const [result] = await this.dbService.addNewRecord(
         "st_community",
@@ -3070,21 +3102,21 @@ async addAmenities(req, res) {
           .join(", "),
         connection // Pass connection for transactional support
       );
-  
+
       if (!result.insertId) {
         throw new Error("Community insert failed.");
       }
-  
+
       // Step 3: Upload community images to S3
       const folderUrl = await S3Service.uploadCommunityImages(
         req.files,
         communityUid,
         "communities/default_images"
       );
-  
+
       // Step 4: Commit the transaction
       await TransactionController.commitTransaction(connection);
-  
+
       // Respond with success
       return res.status(201).json({
         message: "Community created successfully",
@@ -3092,12 +3124,15 @@ async addAmenities(req, res) {
       });
     } catch (error) {
       console.error("Error creating community:", error.message);
-  
+
       // Step 5: Rollback transaction on error
       if (connection) {
-        await TransactionController.rollbackTransaction(connection, error.message);
+        await TransactionController.rollbackTransaction(
+          connection,
+          error.message
+        );
       }
-  
+
       // Respond with error
       return res.status(500).json({
         error: "An error occurred while creating the community.",
@@ -3113,21 +3148,21 @@ async addAmenities(req, res) {
 
   async importAmenities(req, res) {
     const { source_community_id, target_community_id } = req.query;
-  
+
     // Validate input
     if (!source_community_id || !target_community_id) {
       return res.status(400).json({
         error: "Both source_community_id and target_community_id are required.",
       });
     }
-  
+
     let connection;
-  
+
     try {
       // Step 1: Get database connection and start transaction
       connection = await TransactionController.getConnection();
       await TransactionController.beginTransaction(connection);
-  
+
       // Step 2: Fetch amenities associated with the source community ID
       const whereCondition = `community = ${db.escape(source_community_id)}`;
       const amenities = await this.dbService.getRecordsByFields(
@@ -3135,7 +3170,7 @@ async addAmenities(req, res) {
         "amenity",
         whereCondition
       );
-  
+
       if (amenities.length === 0) {
         await TransactionController.rollbackTransaction(
           connection,
@@ -3145,11 +3180,11 @@ async addAmenities(req, res) {
           message: "No amenities found for the provided source_community_id.",
         });
       }
-  
+
       // Step 3: Track added and existing amenities
       const addedAmenities = [];
       const existingAmenities = [];
-  
+
       // Step 4: Insert each amenity into the dy_amenities table for the target community ID
       for (const amenity of amenities) {
         const whereCondition = `amenity = ${db.escape(
@@ -3160,11 +3195,13 @@ async addAmenities(req, res) {
           "id",
           whereCondition
         );
-  
+
         if (existingAmenity.length === 0) {
           // If it doesn't exist, insert the amenity
           const fieldNames = "amenity, community";
-          const fieldValues = `${db.escape(amenity.amenity)}, ${db.escape(target_community_id)}`;
+          const fieldValues = `${db.escape(amenity.amenity)}, ${db.escape(
+            target_community_id
+          )}`;
           await this.dbService.addNewRecord(
             "dy_amenities",
             fieldNames,
@@ -3176,10 +3213,10 @@ async addAmenities(req, res) {
           existingAmenities.push(amenity.amenity);
         }
       }
-  
+
       // Step 5: Commit the transaction
       await TransactionController.commitTransaction(connection);
-  
+
       // Return a detailed success response
       let message = "Amenities import process completed.";
       if (addedAmenities.length > 0) {
@@ -3188,7 +3225,7 @@ async addAmenities(req, res) {
       if (existingAmenities.length > 0) {
         message += ` Already present: ${existingAmenities.join(", ")}.`;
       }
-  
+
       res.status(200).json({
         message,
         added_amenities: addedAmenities.length,
@@ -3196,12 +3233,15 @@ async addAmenities(req, res) {
       });
     } catch (error) {
       console.error("Error importing amenities:", error.message);
-  
+
       // Step 6: Rollback transaction on error
       if (connection) {
-        await TransactionController.rollbackTransaction(connection, error.message);
+        await TransactionController.rollbackTransaction(
+          connection,
+          error.message
+        );
       }
-  
+
       // Respond with error
       res.status(500).json({
         error: "An error occurred while importing amenities.",
@@ -3218,26 +3258,26 @@ async addAmenities(req, res) {
 class ServicesController extends BaseController {
   async createServiceInfo(req, res) {
     let connection;
-  
+
     try {
       let serviceData = req.body;
-  
+
       // Validate input
       if (!serviceData || Object.keys(serviceData).length === 0) {
         return res.status(400).json({
           error: "Invalid input. Provide valid service data.",
         });
       }
-  
+
       // Ensure `svc_info` is stored as a JSON string
       if (typeof serviceData.svc_info === "object") {
         serviceData.svc_info = JSON.stringify(serviceData.svc_info);
       }
-  
+
       // Step 1: Get database connection and start transaction
       connection = await TransactionController.getConnection();
       await TransactionController.beginTransaction(connection);
-  
+
       // Step 2: Insert data into `dy_services_info`
       const [result] = await this.dbService.addNewRecord(
         "dy_services_info",
@@ -3247,16 +3287,16 @@ class ServicesController extends BaseController {
           .join(", "),
         connection
       );
-  
+
       if (!result.insertId) {
         throw new Error("Service info insert failed");
       }
-  
+
       const insertedId = result.insertId;
-  
+
       // Step 3: Commit the transaction
       await TransactionController.commitTransaction(connection);
-  
+
       // Respond with success
       return res.status(201).json({
         message: "Service info created successfully",
@@ -3264,12 +3304,15 @@ class ServicesController extends BaseController {
       });
     } catch (error) {
       console.error("Error creating service info:", error.message);
-  
+
       // Step 4: Rollback transaction on error
       if (connection) {
-        await TransactionController.rollbackTransaction(connection, error.message);
+        await TransactionController.rollbackTransaction(
+          connection,
+          error.message
+        );
       }
-  
+
       // Respond with error
       res.status(500).json({
         error: "An error occurred while creating service info.",
@@ -3286,7 +3329,6 @@ class ServicesController extends BaseController {
   async getServiceDetails(req, res) {
     try {
       const { receipt_id, svc_id } = req.query;
-
 
       const tableName = "dy_services_info dsi";
 
@@ -3521,30 +3563,30 @@ class ServicesController extends BaseController {
     }
   }
 }
-class FirebaseController{
+class FirebaseController {
   async getAnalyticsData(req, res) {
     try {
-      const { startDate = '2025-04-14', endDate = 'today' } = req.query; // Allow dynamic date range
-      
+      const { startDate = "2025-04-14", endDate = "today" } = req.query; // Allow dynamic date range
+
       const [response] = await client.runReport({
-        property: 'properties/476547751',
+        property: "properties/476547751",
         dateRanges: [{ startDate, endDate }],
         metrics: [
-          { name: 'screenPageViews' },  
-          { name: 'activeUsers' },
-          { name: 'eventCount' }
+          { name: "screenPageViews" },
+          { name: "activeUsers" },
+          { name: "eventCount" },
         ],
-        dimensions: [{ name: 'pagePath' }], 
+        dimensions: [{ name: "pagePath" }],
       });
       if (!response || !response.rows || response.rows.length === 0) {
         return res.status(404).json({
           success: false,
-          message: 'No analytics data found.',
+          message: "No analytics data found.",
         });
       }
 
       // Format the response to a structured JSON
-      const formattedData = response.rows.map(row => ({
+      const formattedData = response.rows.map((row) => ({
         pagePath: row.dimensionValues[0].value,
         screenPageViews: row.metricValues[0].value,
         activeUsers: row.metricValues[1].value,
@@ -3554,18 +3596,15 @@ class FirebaseController{
       return res.status(200).json({
         success: true,
         data: formattedData,
-     
       });
-
     } catch (error) {
-      console.error('Error fetching analytics report:', error.message);
+      console.error("Error fetching analytics report:", error.message);
       return res.status(500).json({
         success: false,
-        message: 'Failed to fetch analytics data.',
+        message: "Failed to fetch analytics data.",
       });
     }
   }
-
 }
 
 module.exports = {

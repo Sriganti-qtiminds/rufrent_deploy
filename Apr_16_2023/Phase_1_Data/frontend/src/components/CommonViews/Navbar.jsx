@@ -77,7 +77,7 @@ const Navbar = () => {
       setIntendedPath(path);
       openModal();
     } else {
-      navigate(`/user/${path}`);
+      navigate(`/property/rent/${path}`);
     }
   };
 

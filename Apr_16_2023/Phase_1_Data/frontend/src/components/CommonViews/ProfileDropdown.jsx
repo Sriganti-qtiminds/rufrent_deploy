@@ -24,8 +24,8 @@ const ProfileDropdown = ({ toggleMenu }) => {
   const dropdownRef = useRef(null);
 
   const menuItems = [
-    { label: "Profile", path: "/user/profile" },
-    { label: "My Transaction", path: "/user/transactions" },
+    { label: "Profile", path: "profile" },
+    { label: "My Transaction", path: "transactions" },
     //{ label: "My Services", path: "/" },
     { label: "Logout", action: () => handleLogout() },
   ];
@@ -34,7 +34,6 @@ const ProfileDropdown = ({ toggleMenu }) => {
     try {
       // Clear all cookies
       Cookies.remove(jwtSecretKey);
-
       await resetFilters();
       await resetActionsStore();
       await resetStore();
@@ -58,7 +57,7 @@ const ProfileDropdown = ({ toggleMenu }) => {
   const handleItemClick = (path, action) => {
     setIsOpen(false);
     if (path) {
-      navigate(path);
+      navigate(`/property/rent/${path}`);
     } else if (action) {
       action();
     }

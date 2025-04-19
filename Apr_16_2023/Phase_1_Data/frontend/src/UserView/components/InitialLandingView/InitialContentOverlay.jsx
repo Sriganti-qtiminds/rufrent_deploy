@@ -55,7 +55,7 @@ const ContentOverlay = () => {
   useEffect(() => {
     if (city) {
       const builders = dataFromDB.builders.filter(
-        (eachBuilder) => eachBuilder.city_id == city
+        (eachBuilder) => eachBuilder.city_name == city
       );
       setData((prev) => ({ ...prev, builders }));
     }
@@ -64,7 +64,7 @@ const ContentOverlay = () => {
   useEffect(() => {
     if (builder) {
       const communities = dataFromDB.communities.filter(
-        (eachCommunity) => eachCommunity.builder_id == builder
+        (eachCommunity) => eachCommunity.builder_name == builder
       );
       setData((prev) => ({ ...prev, communities }));
     }
@@ -74,18 +74,17 @@ const ContentOverlay = () => {
     e.preventDefault();
     setSearchClicked(true);
     await setCurrentPage(1);
-    await setFilterData({
-      city,
-      builders: builder,
-      community,
-      hometype,
-      availability,
-      propertydescription: [],
-    });
 
-    setTimeout(() => {
-      navigate("/user");
-    }, 1000);
+    const queryParams = new URLSearchParams();
+
+    if (city) queryParams.append("city", city);
+    if (builder) queryParams.append("builders", builder);
+    if (community) queryParams.append("community", community);
+    if (hometype.length > 0) queryParams.append("hometype", hometype[0]);
+    if (availability.length > 0)
+      queryParams.append("availability", availability[0]);
+
+    navigate(`/property/rent?${queryParams.toString()}`);
   };
 
   return (
@@ -198,12 +197,14 @@ const ContentOverlay = () => {
                 disabled={searchClicked}
               >
                 {searchClicked ? (
-                  <ThreeDots
-                    height="24"
-                    width="24"
-                    color="white"
-                    ariaLabel="loading"
-                  />
+                  <div className="flex justify-center">
+                    <ThreeDots
+                      height="24"
+                      width="24"
+                      color="white"
+                      ariaLabel="loading"
+                    />
+                  </div>
                 ) : (
                   "Search"
                 )}

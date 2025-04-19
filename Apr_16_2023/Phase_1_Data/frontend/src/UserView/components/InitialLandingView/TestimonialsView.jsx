@@ -25,7 +25,7 @@ const testimonialData = [
 ];
 
 const TestimonialsSection = () => (
-  <section id="testimonials" className="pb-10 md:px-20 bg-[#e7eff7]">
+  <section id="testimonials" className="pb-10 px-6 md:px-20 bg-[#e7eff7]">
     <h2 className={`${tailwindStyles.heading_2} mb-6`}>Testimonials</h2>
     <div className="mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
       {testimonialData.map((testimonials, index) => (
