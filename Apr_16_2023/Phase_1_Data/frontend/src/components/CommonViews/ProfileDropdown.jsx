@@ -51,7 +51,7 @@ const ProfileDropdown = ({ toggleMenu }) => {
 
   const handleToggle = () => {
     setIsOpen(!isOpen);
-    toggleMenu();
+    if (typeof toggleMenu === "function") toggleMenu();
   };
 
   const handleItemClick = (path, action) => {

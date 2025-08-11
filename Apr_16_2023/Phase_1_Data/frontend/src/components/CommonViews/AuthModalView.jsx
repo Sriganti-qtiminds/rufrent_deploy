@@ -24,8 +24,16 @@ import useActionsListingsStore from "../../store/userActionsListingsStore";
 import useTransactionsStore from "../../store/transactionsStore";
 
 import tailwindStyles from "../../utils/tailwindStyles";
+import CountryCodeDropdown from "./CountryCodeDropdown";
+import MessageBanner from "./MessageBanner";
+import {
+  checkMobile,
+  signup as apiSignup,
+  login as apiLogin,
+  googleLogin,
+  addMobileNumber,
+} from "../../services/authService";
 
-const apiUrl = `${import.meta.env.VITE_API_URL}`;
 const jwtSecretKey = `${import.meta.env.VITE_JWT_SECRET_KEY}`;
 
 const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
@@ -45,9 +53,7 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
   const [isMobileConfirmed, setIsMobileConfirmed] = useState(false);
   const [isMobileValid, setIsMobileValid] = useState(false);
   const [isLogin, setIsLogin] = useState(true); // Default to login page
-  const [selectedCountry,
-
- setSelectedCountry] = useState(null);
+  const [selectedCountry, setSelectedCountry] = useState(null);
   const [countries, setCountries] = useState([]);
   const [message, setMessage] = useState("");
   const [messageType, setMessageType] = useState("");
@@ -134,19 +140,14 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
       return;
     }
     try {
-      const response = await axios.post(`${apiUrl}/checkMobile`, {
-        mobile_no: mobileNumber,
-      });
+      const response = await checkMobile(mobileNumber);
       displayMessage("success", response.data.message);
       setIsMobileValid(true);
     } catch (error) {
       if (error.response && error.response.status === 400) {
         displayMessage("error", error.response.data.message);
       } else {
-        displayMessage(
-          "error",
-          "Error checking mobile number: " + error.message
-        );
+        displayMessage("error", "Error checking mobile number: " + error.message);
       }
       setIsMobileValid(false);
     }
@@ -172,12 +173,9 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
       const user = userCredential.user;
       await sendEmailVerification(user);
 
-      displayMessage(
-        "success",
-        "Verification email sent! Please check your inbox."
-      );
+      displayMessage("success", "Verification email sent! Please check your inbox.");
 
-      const response = await axios.post(`${apiUrl}/signup`, {
+      const response = await apiSignup({
         uid: user.uid,
         email: user.email,
         token: token,
@@ -218,7 +216,7 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
         return;
       }
 
-      const response = await axios.post(`${apiUrl}/login`, {
+      const response = await apiLogin({
         token: userCredential._tokenResponse.idToken,
         uid: user.uid,
       });
@@ -229,7 +227,6 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
         displayMessage("success", "Please Enter Mobile Number");
         setAfterLoginData(data);
         setAfterLoginIsMobile(!data.isMobile);
-        // Do not change isLogin here to keep login page
       }
       if (data.token && data.isMobile) {
         displayMessage("success", "User logged in successfully!");
@@ -257,26 +254,18 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
 
   const handleForgotPassword = async () => {
     if (!email) {
-      displayMessage(
-        "error",
-        "Please enter your email address to reset your password!"
-      );
+      displayMessage("error", "Please enter your email address to reset your password!");
       return;
     }
     try {
       await sendPasswordResetEmail(auth, email);
       displayMessage("success", "Password reset email sent!");
     } catch (error) {
-      displayMessage(
-        "error",
-        `Error sending password reset email: ${error.message}`
-      );
+      displayMessage("error", `Error sending password reset email: ${error.message}`);
     }
   };
 
-  const fullMobileNumber = selectedCountry
-    ? selectedCountry.code + mobileNumber
-    : "";
+  const fullMobileNumber = selectedCountry ? selectedCountry.code + mobileNumber : "";
 
   const handleGoogleAuth = async () => {
     let num1 = "";
@@ -285,7 +274,7 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
       googleProvider.setCustomParameters({ prompt: "select_account" });
       const result = await signInWithPopup(auth, googleProvider);
       const user = result.user;
-      const response = await axios.post(`${apiUrl}/g_login`, {
+      const response = await googleLogin({
         uid: user.uid,
         email: user.email,
         displayName: name || user.displayName,
@@ -300,7 +289,6 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
         displayMessage("success", "Please Enter Mobile Number");
         setAfterLoginData(data);
         setAfterLoginIsMobile(!data.isMobile);
-        // Do not change isLogin to keep login page
       }
       if (data.token && data.isMobile) {
         displayMessage("success", "User signed in with Google successfully!");
@@ -326,7 +314,7 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
   };
 
   const submitMobileNumber = async () => {
-    const response = await axios.put(`${apiUrl}/addMobileNumber`, {
+    const response = await addMobileNumber({
       id: afterLoginData.id,
       mobile_no: fullMobileNumber,
     });
@@ -413,28 +401,11 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
           </div>
         </div>
         <div className="relative bg-white w-full md:w-1/2 p-6 flex flex-col justify-center items-center">
-          {message && (
-            <div
-              className={`${tailwindStyles.paragraph}
-                absolute top-2 w-[calc(100%-20px)] mb-4 p-2 text-center rounded ${
-                  messageType === "success"
-                    ? "bg-green-100 text-green-700"
-                    : "bg-red-100 text-red-700"
-                }`}
-            >
-              {message}
-            </div>
-          )}
+          <MessageBanner message={message} type={messageType} />
           {((!isLogin && !isMobileConfirmed) || afterLoginIsMobile) && (
             <div className="flex flex-col items-center">
-              <img
-                src="/MOBILE.png"
-                className="w-10 h-10 mb-2"
-                alt="mobile_icon"
-              />
-              <h2 className={`${tailwindStyles.heading_2} mb-2`}>
-                Mobile Number
-              </h2>
+              <img src="/MOBILE.png" className="w-10 h-10 mb-2" alt="mobile_icon" />
+              <h2 className={`${tailwindStyles.heading_2} mb-2`}>Mobile Number</h2>
               <div className="mb-4 min-w-[240px] lg:min-w-[280px]">
                 <div className="flex items-center space-x-2 mb-2">
                   <CountryCodeDropdown
@@ -478,28 +449,17 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
                 </div>
               </div>
               {afterLoginIsMobile ? (
-                <button
-                  className={`${tailwindStyles.secondaryButton}`}
-                  onClick={submitMobileNumber}
-                >
+                <button className={`${tailwindStyles.secondaryButton}`} onClick={submitMobileNumber}>
                   Submit
                 </button>
               ) : (
-                <button
-                  className={`${tailwindStyles.secondaryButton}`}
-                  // className="flex items-center justify-center bg-blue-500 text-white px-2 py-1 rounded-lg hover:bg-blue-600 transition-all duration-300 transform hover:scale-105"
-                  onClick={handleContinue}
-                >
-                 Continue
+                <button className={`${tailwindStyles.secondaryButton}`} onClick={handleContinue}>
+                  Continue
                 </button>
               )}
               {!afterLoginIsMobile && (
-                <button
-                  className={`${tailwindStyles.heading_3} mt-2`}
-                  onClick={handleSwitch}
-                >
-                  Already have an account?{" "}
-                  <span className="text-[#ffc107]">Login</span>
+                <button className={`${tailwindStyles.heading_3} mt-2`} onClick={handleSwitch}>
+                  Already have an account? <span className="text-[#ffc107]">Login</span>
                 </button>
               )}
             </div>
@@ -508,17 +468,9 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
             <div>
               <div className="flex flex-col items-center">
                 {isLogin ? (
-                  <img
-                    src="/LOGIN.png"
-                    className="w-10 h-10 mb-2"
-                    alt="login_icon"
-                  />
+                  <img src="/LOGIN.png" className="w-10 h-10 mb-2" alt="login_icon" />
                 ) : (
-                  <img
-                    src="/SIGNUP.png"
-                    className="w-10 h-10 mb-2"
-                    alt="signup_icon"
-                  />
+                  <img src="/SIGNUP.png" className="w-10 h-10 mb-2" alt="signup_icon" />
                 )}
                 <h2 className={`${tailwindStyles.heading_2} mb-2`}>
                   {isLogin ? "Welcome" : "Create Account"}
@@ -558,14 +510,8 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
               )}
               {isLogin && (
                 <div className="w-full flex justify-between mb-2">
-                  <div
-                    className={`${tailwindStyles.paragraph} flex items-center space-x-2`}
-                  >
-                    <input
-                      onClick={togglePasswordVisibility}
-                      id="show"
-                      type="checkbox"
-                    />
+                  <div className={`${tailwindStyles.paragraph} flex items-center space-x-2`}>
+                    <input onClick={togglePasswordVisibility} id="show" type="checkbox" />
                     <label htmlFor="show">Show Password</label>
                   </div>
                   <span
@@ -577,25 +523,17 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
                 </div>
               )}
               <div className="flex flex-col space-y-2">
-                <button
-                  className={`${tailwindStyles.secondaryButton} mt-2`}
-                  onClick={isLogin ? handleLogin : handleSignup}
-                >
+                <button className={`${tailwindStyles.secondaryButton} mt-2`} onClick={isLogin ? handleLogin : handleSignup}>
                   {isLogin ? "Login" : "Sign Up"}
                 </button>
-                <button
-                  className={`${tailwindStyles.heading_3}`}
-                  onClick={handleSwitch}
-                >
+                <button className={`${tailwindStyles.heading_3}`} onClick={handleSwitch}>
                   {isLogin ? (
                     <>
-                      Don't have an account?{" "}
-                      <span className="text-[#ffc107]">Sign up</span>
+                      Don't have an account? <span className="text-[#ffc107]">Sign up</span>
                     </>
                   ) : (
                     <>
-                      Already have an account?{" "}
-                      <span className="text-[#ffc107]">Login</span>
+                      Already have an account? <span className="text-[#ffc107]">Login</span>
                     </>
                   )}
                 </button>
@@ -606,29 +544,15 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
                 <div className="line flex-1 h-0.5 bg-gray-200"></div>
               </div>
               <div>
-                <button
-                  className={`border rounded-md h-8 w-full flex items-center justify-center gap-2`}
-                  onClick={handleGoogleAuth}
-                >
-                  <img
-                    src="/GOOGLE.png"
-                    alt="Google Logo"
-                    className="w-5 h-5 bg-white rounded-full"
-                  />
-                  <p className={`${tailwindStyles.paragraph_b}`}>
-                    Continue With Google
-                  </p>
+                <button className={`border rounded-md h-8 w-full flex items-center justify-center gap-2`} onClick={handleGoogleAuth}>
+                  <img src="/GOOGLE.png" alt="Google Logo" className="w-5 h-5 bg-white rounded-full" />
+                  <p className={`${tailwindStyles.paragraph_b}`}>Continue With Google</p>
                 </button>
               </div>
             </div>
           )}
-          <div
-            onClick={onClose}
-            className="absolute flex items-center justify-center top-4 right-4 bg-[#001433] w-7 h-7 rounded-full"
-          >
-            <button className="text-xs text-gray-400 hover:text-gray-600 transition-colors duration-300">
-              ✕
-            </button>
+          <div onClick={onClose} className="absolute flex items-center justify-center top-4 right-4 bg-[#001433] w-7 h-7 rounded-full">
+            <button className="text-xs text-gray-400 hover:text-gray-600 transition-colors duration-300">✕</button>
           </div>
         </div>
       </div>
@@ -637,79 +561,3 @@ const AuthModal = ({ isOpen, onClose, triggerBy = "/" }) => {
 };
 
 export default AuthModal;
-
-
-// CountryCodeDropdown.jsx
-
-export const CountryCodeDropdown = ({
-  dropdownRef,
-  isDropdownOpen,
-  setDropdownOpen,
-  selectedCountry,
-  setSelectedCountry,
-  countries,
-  searchTerm,
-  setSearchTerm,
-}) => {
-  const filteredCountries = countries.filter((country) =>
-    country.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
-
-  return (
-    <div className="relative w-[30%]" ref={dropdownRef}>
-      <button
-        className="w-full px-2 h-8 border rounded flex items-center justify-between bg-white text-sm md:text-md"
-        onClick={() => setDropdownOpen(!isDropdownOpen)}
-      >
-        {selectedCountry ? (
-          <div className="flex items-center space-x-1">
-            <img
-              src={selectedCountry.flag}
-              alt={selectedCountry.name}
-              className="w-5 h-5"
-            />
-            <span className={`${tailwindStyles.paragraph} truncate`}>
-              {selectedCountry.code}
-            </span>
-          </div>
-        ) : (
-          <span>Select</span>
-        )}
-      </button>
-      {isDropdownOpen && (
-        <div className="absolute z-10 mt-2 bg-white border rounded shadow-lg w-full min-w-[100px]">
-          <ul className="max-h-60 overflow-y-auto">
-            <li className="p-2">
-              <input
-                type="text"
-                placeholder="Search countries"
-                className="w-full p-2 border rounded"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </li>
-            {filteredCountries.map((country, index) => (
-              <li
-                key={index}
-                className="p-2 flex items-center cursor-pointer hover:bg-gray-100"
-                onClick={() => {
-                  setSelectedCountry(country);
-                  setDropdownOpen(false);
-                }}
-              >
-                <img
-                  src={country.flag}
-                  alt={country.name}
-                  className="w-5 h-5 mr-2"
-                />
-                <span className={`${tailwindStyles.paragraph} truncate`}>
-                  {country.name} {country.code}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-};
