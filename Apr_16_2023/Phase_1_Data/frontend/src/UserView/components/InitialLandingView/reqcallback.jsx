@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import axios from "axios";
 import tailwindStyles from "../../../utils/tailwindStyles"; 
-import { motion } from "framer-motion";
 
 const apiUrl = `${import.meta.env.VITE_API_URL}`;
 
